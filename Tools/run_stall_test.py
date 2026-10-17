@@ -83,4 +83,7 @@ if not a.no_trace:
     if trace.exists():shutil.copy2(trace,out/'host.trace.jsonl')
     with open(out/'viewer.trace.jsonl','wb') as log:
         subprocess.run(ssh+['cat "$HOME/Library/Logs/RetinaLink/Viewer-trace.jsonl"'],stdout=log,check=True)
+metadata=json.loads((out/'test.json').read_text())
+metadata['collectionFinished']=time.time()
+(out/'test.json').write_text(json.dumps(metadata,indent=2))
 print('Saved',out,flush=True)

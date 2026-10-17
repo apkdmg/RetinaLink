@@ -32,7 +32,7 @@ for ROLE in Host Viewer; do
 <key>CFBundleDisplayName</key><string>RetinaLink $ROLE</string>
 <key>CFBundlePackageType</key><string>APPL</string>
 <key>CFBundleShortVersionString</key><string>0.2.9</string>
-<key>CFBundleVersion</key><string>30</string>
+<key>CFBundleVersion</key><string>32</string>
 <key>LSMinimumSystemVersion</key><string>$MIN</string>
 <key>NSHighResolutionCapable</key><true/>
 <key>NSLocalNetworkUsageDescription</key><string>Discover and connect to your other Mac to stream a display over your local network.</string>

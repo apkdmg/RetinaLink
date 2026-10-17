@@ -2,13 +2,14 @@
 
 RetinaLink extends a Mac Studio desktop to the native 5120 × 2880 panel of a 2014 5K iMac over an IP network. Host requires Apple silicon and macOS 13+. Viewer includes Intel macOS 10.15+ and Apple silicon macOS 11+ binaries. The tested receiver is Big Sur 11.7.8 with an AMD Radeon R9 M290X.
 
-**0.2.9 reduces the iMac's full-frame upload GPU time from roughly 6.5 ms to 3.6 ms and staging setup from roughly 6.0 ms to 4.75 ms in separate controlled tests. Stable 5K60 across desktop workloads remains unresolved.** See `VALIDATION.md` for source-side drawable waits, presentation-counter limitations and sustained release tests.
+**0.2.9 reduces the iMac's full-frame upload GPU time from roughly 6.5 ms to 3.6 ms and staging setup from roughly 6.0 ms to 4.75 ms in separate controlled tests. A major slowdown was isolated to the diagnostic UI capture helper; SSH-only scrolling reached 58.1 presented fps over three minutes; the final build measured 55.9 fps in its 90-second check, with variable source production. Strictly stable 5K60 across desktop workloads remains unresolved.** See `VALIDATION.md` for source-side drawable waits, presentation-counter limitations and sustained release tests.
 
-## Changes in 0.2.9 build 30
+## Changes in 0.2.9 build 32
 
 - Adjacent changed BC7 tiles on the same tile row are uploaded as a single rectangle. A full 5K frame uses 23 blits instead of 920. Unchanged holes and row boundaries remain separate, and every compressed pixel byte is preserved.
 - CPU-write-only staging buffers use write-combined memory, and their destination pointer is acquired once per upload. GPU completion still owns staging-buffer reuse; transport remains bounded to three frames.
 - GPU readback regression tests cover the original and coalesced upload paths, both memory modes, all three resolutions, unordered tiles, sparse holes, bottom edges and queued updates.
+- Optional traces also account for resize redraws and bounded presentation-timing experiments. Neither two-drawable nor delayed-presentation experiments established a suitable production gain, so normal vsynced presentation remains the default.
 - Capture timestamp diagnostics retain signed callback/display offsets. Virtual-display timestamps were often ahead of delivery; clamping them to zero had hidden this detail.
 - Additional opt-in, bounded probes isolate buffer holding, source versus copied-surface encoding, capture on/off and standalone iMac presentation. They are disabled in normal use. No experiment that merely increases requested rates or reports GPU completions as presentations is enabled.
 

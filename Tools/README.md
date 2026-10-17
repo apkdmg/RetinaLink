@@ -56,3 +56,11 @@ The GPU scene's `--frame-trace` records per-frame drawable acquisition, GPU exec
 Viewer `--trace-actual-present` replaces Metal's convenience presentation registration with an explicit scheduled-handler call to `drawable.present()`. This measures that alternative handoff but changed observed scheduling, so it must not be treated as a transparent measurement of the original helper. It remains opt-in and is excluded from release tests.
 
 The transparent compositor pulse experiment did not show a reversed on/off effect and is not part of production. `run_pulse_test.py` and `Scenes/PulseScene.swift` retain the bounded reproduction, not a recommended setting.
+
+
+Keep UI automation inactive during performance measurements. Resetting the REPL alone did not stop SkyComputerUseService in this session; its continuing capture materially lowered source FPS. Only the agent-owned helper was terminated for the successful SSH-only control. Do not terminate unrelated capture/remote-access services without authorization. The test runner writes `collectionFinished` after fetching evidence; a scene's earlier `finished` timestamp is not a safe signal to replace Host or Viewer. Prefer waiting for the runner process to exit.
+
+
+Build 31+ traces `surface_update`, `redraw` and `redraw_presented`, including the original content sequence. This accounts for the static-image resize path separately from received frames. `--skip-redundant-redraws` is a diagnostic control, not enabled by default; the steady trace found no extra redraw presentations.
+
+Build 32 Viewer `--presentation-plan 0,24,0 --presentation-period 25` runs immediate/timed/immediate phases. Leads must be finite, 0…40 ms, plans bounded to six phases, first and last lead zero, and periods 10…60 seconds. Targets and phase changes are traced. The final zero phase persists, returning to normal rendering. Discard transition windows; scheduling changes can perturb queued frames. This experiment did not establish a production gain and is disabled by default. Timed presentation can add latency; do not report its FPS without that tradeoff.

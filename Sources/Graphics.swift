@@ -102,7 +102,7 @@ final class TextureUploader {
     let writeCombined:Bool
     private(set) var lastBlitCount=0
     private(set) var texture: MTLTexture?
-    private var lastSequence: UInt64 = 0
+    private(set) var lastSequence: UInt64 = 0
     private let poolLock = NSLock()
     private var available: [MTLBuffer] = []
     init(device: MTLDevice, coalesced: Bool = !LaunchOptions.has("--tile-blits"),writeCombined:Bool = !LaunchOptions.has("--cached-upload")) { self.device = device;self.coalesced=coalesced;self.writeCombined=writeCombined }
@@ -179,6 +179,9 @@ final class DisplayView: NSView {
     private let surface = CAMetalLayer()
     private let redrawLock = NSLock()
     private var redrawPending = false
+    private let presentationPlan:[Double]
+    private let presentationPeriod:Double
+    private var presentationEpoch=0.0,presentationPhase = -1,nextPresentation=0.0
     var onFrame: ((RenderTiming) -> Void)?
     var onPresentation: ((Int, Int, Double) -> Void)?
     var onActualPresent: ((Double) -> Void)?
@@ -188,6 +191,12 @@ final class DisplayView: NSView {
     override func makeBackingLayer() -> CALayer { surface }
     var metalLayer: CAMetalLayer { surface }
     init(viewer: Bool) throws {
+        let raw=LaunchOptions.value("--presentation-plan")
+        let parts=raw?.split(separator:",",omittingEmptySubsequences:false).map(String.init) ?? []
+        let plan=parts.compactMap(Double.init)
+        let period=Double(LaunchOptions.value("--presentation-period") ?? "25") ?? .nan
+        guard raw==nil || (!plan.isEmpty && plan.count==parts.count && plan.count<=6 && plan.first==0 && plan.last==0 && plan.allSatisfy({$0.isFinite && (0...40).contains($0)}) && period.isFinite && (10...60).contains(period)) else {throw LinkError.invalid("Presentation probe needs 0…40 ms leads, initial/final zero and 10…60 second phases")}
+        presentationPlan=plan;presentationPeriod=period
         guard let d = MTLCreateSystemDefaultDevice(), let q = d.makeCommandQueue() else { throw LinkError.invalid("Metal GPU unavailable") }
         guard supportsBC(d) else { throw LinkError.invalid("This GPU/driver does not report BC texture support") }
         device = d; commandQueue = q; uploader = TextureUploader(device:d)
@@ -210,7 +219,11 @@ final class DisplayView: NSView {
     private func updateDrawableSize() {
         guard let layer = layer as? CAMetalLayer else { return }
         let scale = window?.backingScaleFactor ?? 2
-        layer.contentsScale = scale; layer.drawableSize = CGSize(width:max(1,bounds.width*scale),height:max(1,bounds.height*scale))
+        let size=CGSize(width:max(1,bounds.width*scale),height:max(1,bounds.height*scale))
+        let changed=layer.contentsScale != scale || layer.drawableSize != size
+        FrameTrace.shared.event("surface_update",fields:["view":traceID,"changed":changed,"width":size.width,"height":size.height])
+        if !changed && LaunchOptions.has("--skip-redundant-redraws") {return}
+        layer.contentsScale = scale; layer.drawableSize = size
         // A static desktop still needs redrawing after entering full screen or resizing.
         redrawLock.lock()
         if redrawPending { redrawLock.unlock(); return }
@@ -220,7 +233,18 @@ final class DisplayView: NSView {
             self.redrawLock.lock(); self.redrawPending = false; self.redrawLock.unlock()
             guard let texture = self.uploader.texture, let command = self.commandQueue.makeCommandBuffer(),
                   let drawable = self.surface.nextDrawable() else { return }
-            do { try self.draw(texture,into:command,drawable:drawable); self.present(drawable,on:command,sequence:0); command.commit() }
+            do {
+                let contentSequence=self.uploader.lastSequence
+                FrameTrace.shared.event("redraw",sequence:contentSequence,fields:["view":self.traceID])
+                if FrameTrace.shared.enabled {
+                    if #available(macOS 10.15.4, *) {
+                        drawable.addPresentedHandler {[weak self] drawable in
+                            FrameTrace.shared.event("redraw_presented",sequence:contentSequence,fields:["view":self?.traceID ?? "closed","presented_time":drawable.presentedTime])
+                        }
+                    }
+                }
+                try self.draw(texture,into:command,drawable:drawable); self.present(drawable,on:command,sequence:0); command.commit()
+            }
             catch { self.onError?(String(describing:error)) }
         }
     }
@@ -276,6 +300,22 @@ final class DisplayView: NSView {
         }
     }
     private func present(_ drawable: CAMetalDrawable, on command: MTLCommandBuffer, sequence: UInt64) {
+        if sequence>0 && !presentationPlan.isEmpty {
+            let now=CACurrentMediaTime()
+            if presentationEpoch==0 {presentationEpoch=now}
+            let phase=min(presentationPlan.count-1,Int((now-presentationEpoch)/presentationPeriod))
+            if phase != presentationPhase {
+                presentationPhase=phase;nextPresentation=0
+                DiagnosticLog.shared.record("presentation-probe","Phase \(phase); lead \(presentationPlan[phase]) ms; vsync retained")
+                FrameTrace.shared.event("presentation_mode",fields:["view":traceID,"phase":phase,"lead_ms":presentationPlan[phase]])
+            }
+            let lead=presentationPlan[phase]/1000
+            if lead>0 {
+                let target=max(now+lead,nextPresentation);nextPresentation=target+1.0/60.0
+                FrameTrace.shared.event("presentation_target",sequence:sequence,fields:["view":traceID,"target":target,"lead_ms":(target-now)*1000])
+                command.present(drawable,atTime:target);return
+            }
+        }
         guard LaunchOptions.has("--trace-actual-present") else {command.present(drawable);return}
         // Match Metal's convenience method: present the drawable after scheduling,
         // without waiting for completion. Time the deferred handoff itself.
