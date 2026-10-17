@@ -1,6 +1,6 @@
 # Developer ID releases
 
-A valid **Developer ID Application** identity is installed for team ZPCS5VQL89. Real signed build 44 passes Host and actual iMac self-tests. Build 45 adds the classic-Keychain silent-access guard. The notarization login and Apple acceptance remain pending; the working installed apps remain 0.3.0 build 43.
+A valid **Developer ID Application** identity is installed for team ZPCS5VQL89. Real signed builds 44 and 45 pass Host and actual iMac self-tests. Build 45 adds the classic-Keychain silent-access guard. The notarization login and Apple acceptance remain pending; the working installed apps remain 0.3.0 build 43.
 
 ## Developer setup, once
 

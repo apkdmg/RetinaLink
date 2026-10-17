@@ -1,6 +1,6 @@
 # RetinaLink
 
-The last installed and fully exercised release is 0.3.0 build 43. The 0.3.1 candidate adds Developer ID release tooling and pairing-preserving Viewer updates. The first real Developer ID build (44) passes Host and iMac self-tests; build 45 adds a verified classic-Keychain dialog guard. Apple notarization and signed installation/upgrade validation are still pending the notarization login. See [RELEASING.md](RELEASING.md).
+The last installed and fully exercised release is 0.3.0 build 43. The 0.3.1 candidate adds Developer ID release tooling and pairing-preserving Viewer updates. Real Developer ID builds 44 and 45 pass Host and iMac self-tests; build 45 adds a verified classic-Keychain dialog guard. Apple notarization and signed installation/upgrade validation are still pending the notarization login. See [RELEASING.md](RELEASING.md).
 
 Turn a Retina iMac into an unattended second display, with setup and daily controls on the main Mac. Host installs Viewer over an authenticated SSH connection, establishes saved device trust, and manages its display connection automatically. Viewer stays fullscreen, shows a quiet standby screen when disconnected, and reconnects without a mouse, keyboard, pairing code or Connect button on the iMac.
 
