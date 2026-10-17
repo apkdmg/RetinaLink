@@ -1,6 +1,6 @@
 # Developer ID releases
 
-The latest packaged candidate is **0.5.0 build 52**, with Host-managed dedicated-account provisioning. Its drag-to-Applications DMG contains the unchanged notarized Host and embedded Viewer. Dedicated physical restart and password-free wake checks remain deferred; do not describe those as passed. The completed 0.4.0 update checks below are historical evidence, not evidence of every 0.5.0 flow.
+The latest release candidate is **0.6.0 build 53**, with one-time Viewer installation, local approval on both displays and direct authenticated TLS. Host/Viewer upgrades retain the existing binding and credential. Both apps and both role-specific DMGs are Developer ID signed, Apple-accepted and stapled. Real two-Mac approval/cancellation tests, installed 52→53 migration without an app-owned display SSH tunnel, Host agent restart and Viewer relaunch pass. The dedicated account's protected Viewer update needs separate owner authentication; physical reboot/first-login/wake checks remain deferred. See [NATIVE_CONNECTION.md](NATIVE_CONNECTION.md) and [VALIDATION.md](VALIDATION.md).
 
 ## Build the consumer DMG
 
@@ -10,12 +10,16 @@ After `release.py advance` has completed both app tickets and embedded the stapl
 python3 -m venv work/dmg-tools
 work/dmg-tools/bin/python -m pip install -r Tools/dmg-requirements.txt
 work/dmg-tools/bin/python Tools/package_dmg.py prepare \
-  --release work/release-0.5.0-build52 --directory work/dmg-0.5.0-build52
+  --release work/release-0.6.0-build53 --directory work/dmg-0.6.0-build53
 work/dmg-tools/bin/python Tools/package_dmg.py advance \
-  --directory work/dmg-0.5.0-build52 --output outputs/RetinaLink-0.5.0.dmg
+  --directory work/dmg-0.6.0-build53 --output outputs/RetinaLink-0.6.0.dmg
+work/dmg-tools/bin/python Tools/package_dmg.py prepare --role Viewer \
+  --release work/release-0.6.0-build53 --directory work/dmg-0.6.0-build53-viewer
+work/dmg-tools/bin/python Tools/package_dmg.py advance \
+  --directory work/dmg-0.6.0-build53-viewer --output outputs/RetinaLink-Viewer-0.6.0.dmg
 ```
 
-`advance` submits once, then returns exit code 3 while Apple processes the DMG. Repeat that command later to check the saved submission; it never rebuilds a submitted image. Upon acceptance it staples and validates the DMG ticket, checks Gatekeeper, verifies the mounted Host and embedded Viewer, checks Finder layout and the Applications symlink, and verifies a disposable copy of Host. The source app signatures, identifiers, pairing namespace and embedded Viewer archive are unchanged. Nothing is installed or launched. The image includes an offline Setup Guide with the ongoing Remote Login requirement and FileVault/restart limitations.
+`advance` submits once, then returns exit code 3 while Apple processes the DMG. Repeat that command later to check the saved submission; it never rebuilds a submitted image. Upon acceptance it staples and validates the DMG ticket, checks Gatekeeper, verifies the mounted Host and embedded Viewer, checks Finder layout and the Applications symlink, and verifies a disposable copy of Host. The source app signatures, identifiers, pairing namespace and embedded Viewer archive are unchanged. Nothing is installed or launched. Each image includes the offline no-SSH Setup Guide and the unchanged FileVault/restart limitations. The standard flow uses a one-time local Viewer installation; advanced dedicated-account administration remains separate.
 
 `Tools/MakeInstallerArtwork.swift` renders the 1x/2x background and an illustrative layout preview from our own assets. `dmgbuild` writes Finder metadata without Finder automation or a UI capture helper. The preview is a layout rendering, not a screenshot of Finder. Use a fresh `--directory` for a changed design; never overwrite a signed/submitted release. `verify` checks the final digest, signature, staple and Gatekeeper verdict and can export the identical completed image. Artwork and copy-only changes do not require rebuilding or updating the installed apps. Public update feeds still use role-specific ZIP archives, not this DMG.
 

@@ -126,7 +126,7 @@ struct NativeSetupCommand: Codable {
 // shell commands, credentials for an OS account, or software uploads.
 final class NativeSetupWire {
     let connection:NWConnection
-    var onReady:(()->Void)?, onMessage:((NativeSetupMessage)->Void)?, onClose:((String)->Void)?
+    var onReady:(()->Void)?, onMessage:((NativeSetupMessage)->Void)?, onClose:((String)->Void)?, onWaiting:((String)->Void)?
     private(set) var closed = false
     private var count = 0
     init(_ connection:NWConnection) { self.connection = connection }
@@ -136,7 +136,8 @@ final class NativeSetupWire {
             switch state {
             case .ready: self.onReady?(); self.read()
             case .failed: self.cancel("Setup connection failed. Check the local network.")
-            case .waiting: self.cancel("Setup is waiting for the local network. Check Local Network permission.")
+            case .waiting:
+                self.onWaiting?("Waiting for the local network. Allow Local Network access for RetinaLink if macOS asks, and keep Viewer open.")
             case .cancelled: self.cancel("Setup cancelled.")
             default: break
             }
@@ -174,7 +175,7 @@ final class NativeSetupWire {
     func cancel(_ reason:String) {
         guard !closed else { return }; closed = true
         connection.stateUpdateHandler = nil; connection.cancel(); onClose?(reason)
-        onReady = nil; onMessage = nil; onClose = nil
+        onReady = nil; onMessage = nil; onClose = nil; onWaiting = nil
     }
 }
 
@@ -186,7 +187,7 @@ final class NativePairSession {
     private(set) var peer:NativePeer?, cipher:NativeCipher?, localApproved = false, remoteApproved = false
     private var peerCommitment:Data?, stage = "initial", readyNotified = false, enrollmentSent = false
     var onVerify:((NativePeer,String)->Void)?, onBothApproved:(()->Void)?
-    var onEnrollment:((NativeEnrollment)throws->Void)?, onCommitted:(()->Void)?, onClose:((String)->Void)?
+    var onEnrollment:((NativeEnrollment)throws->Void)?, onCommitted:(()->Void)?, onClose:((String)->Void)?, onStatus:((String)->Void)?
     init(connection:NWConnection,identity:NativePeer) {
         wire = NativeSetupWire(connection); exchange = NativeExchange(identity)
     }
@@ -200,6 +201,7 @@ final class NativePairSession {
             do { try self?.receive(message) } catch { self?.wire.cancel("Setup could not be verified. No existing pairing was replaced.") }
         }
         wire.onClose = { [weak self] reason in self?.onClose?(reason) }
+        wire.onWaiting = { [weak self] message in self?.onStatus?(message) }
         wire.start()
     }
     private func receive(_ message:NativeSetupMessage) throws {

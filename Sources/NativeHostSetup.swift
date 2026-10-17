@@ -35,6 +35,9 @@ final class NativeHostSetup:NSObject,NSWindowDelegate {
             Design.card([Design.text("Find your display",17,.semibold),discovered,Design.formField("Or enter its local address",field:address)]),
             codeCard!,Design.card([viewerStartup,hostStartup,
                 Design.text("Viewer starts after sign-in. FileVault may require a local disk unlock after a restart; it is never disabled.",12,secondary:true)]),result],spacing:18)
+        for view in body.arrangedSubviews where view is NSVisualEffectView {
+            view.widthAnchor.constraint(equalTo:body.widthAnchor).isActive = true
+        }
         window = Design.window("Add Display — RetinaLink",content:body,width:720,height:790,footer:horizontal([cancelButton,continueButton]))
         window?.delegate = self
         discovery.onChange = { [weak self] items in
@@ -43,7 +46,10 @@ final class NativeHostSetup:NSObject,NSWindowDelegate {
             self.discovered.addItems(withTitles:items.map(\.name))
         }
         discovery.start(type:nativePairingType)
-        if DeviceSettings.binding != nil {
+        if let binding = DeviceSettings.binding, NativePendingSetup.viewerID != nil {
+            address.stringValue = binding.address
+            result.stringValue = "Finish your interrupted setup with the same iMac. Your approved credential is kept. If Viewer already paired, open it to reconnect automatically."
+        } else if DeviceSettings.binding != nil {
             result.stringValue = "Your existing pairing is kept. Update and open Viewer to reconnect directly without Remote Login."
             continueButton.isEnabled = false
         }
@@ -59,7 +65,7 @@ final class NativeHostSetup:NSObject,NSWindowDelegate {
             result.stringValue = "Approve this Mac on the iMac too. Both screens must show the same number."
             return
         }
-        guard stage == "choose", DeviceSettings.binding == nil else { return }
+        guard stage == "choose", DeviceSettings.binding == nil || NativePendingSetup.viewerID != nil else { return }
         let target = address.stringValue.trimmingCharacters(in:.whitespacesAndNewlines)
         guard DeviceBinding.validAddress(target) else { result.stringValue = "Select your iMac or enter its local address."; return }
         let tcp = NWProtocolTCP.Options(); tcp.noDelay = true; tcp.connectionTimeout = 8
@@ -67,6 +73,7 @@ final class NativeHostSetup:NSObject,NSWindowDelegate {
         let session = NativePairSession(connection:connection,identity:NativePeer.current(role:"host")); self.session = session
         stage = "connecting"; continueButton.isEnabled = false
         result.stringValue = "Connecting to Viewer. No iMac account password or Remote Login is needed…"
+        session.onStatus = { [weak self] in self?.result.stringValue = $0 }
         session.onVerify = { [weak self] peer,code in
             guard let self = self else { return }
             self.verificationCode = code; self.codeLabel.stringValue = code; self.codeCard?.isHidden = false
@@ -77,31 +84,41 @@ final class NativeHostSetup:NSObject,NSWindowDelegate {
             self.result.stringValue = "This number verifies the two Macs. It is not an account password."
         }
         session.onBothApproved = { [weak self,weak session] in
-            guard let self = self, let session = session, let peer = session.peer, DeviceSettings.binding == nil else { return }
+            guard let self = self, let session = session, let peer = session.peer else { return }
             do {
-                let binding = DeviceBinding(hostID:DeviceSettings.hostID,hostName:session.exchange.identity.name,
+                let binding:DeviceBinding, credential:String
+                if let existing = DeviceSettings.binding {
+                    guard NativePendingSetup.viewerID == peer.id, existing.hostID == session.exchange.identity.id,
+                          existing.viewerName == peer.name, existing.username == peer.username,
+                          let saved = try DeviceVault.credential() else { throw LinkError.invalid("Finish setup with the same iMac. An existing pairing cannot be replaced.") }
+                    binding = existing; credential = saved
+                } else {
+                    binding = DeviceBinding(hostID:DeviceSettings.hostID,hostName:session.exchange.identity.name,
                     viewerName:peer.name,address:target,username:peer.username,dedicatedDisplay:false,
                     viewerStartup:self.viewerStartup.state == .on,hostStartup:self.hostStartup.state == .on,
                     fileVault:peer.fileVault,automaticLoginConfigured:false,enrolledAt:Date())
-                let credential = randomPairingCode().replacingOccurrences(of:"-",with:"")
+                    credential = randomPairingCode().replacingOccurrences(of:"-",with:"")
                 // Persist before transmitting: a lost final ACK does not lose the
                 // Host's half of an already approved Viewer pairing.
-                try DeviceVault.write(Data(credential.utf8),account:DeviceVault.credentialAccount)
-                if binding.hostStartup && DeviceSettings.nativeTestScope == nil {
-                    try StartupAgent.install(executable:Bundle.main.executablePath!,role:"Host",arguments:["--autostart"])
+                    try DeviceVault.write(Data(credential.utf8),account:DeviceVault.credentialAccount)
+                    if binding.hostStartup && DeviceSettings.nativeTestScope == nil {
+                        try StartupAgent.install(executable:Bundle.main.executablePath!,role:"Host",arguments:["--autostart"])
+                    }
+                    NativePendingSetup.begin(viewerID:peer.id); try DeviceSettings.save(binding)
                 }
-                try DeviceSettings.save(binding); NativeConnectionSettings.enable()
+                NativeConnectionSettings.enable()
                 self.prepared = binding; self.stage = "enrolling"; self.continueButton.isEnabled = false
                 self.result.stringValue = "Saving your approved pairing securely in Keychain…"
                 self.onPrepared?(binding)
                 session.enroll(NativeEnrollment(binding:binding,credential:credential))
             } catch {
-                if self.prepared == nil { DeviceVault.remove(DeviceVault.credentialAccount) }
+                if self.prepared == nil && DeviceSettings.binding == nil { DeviceVault.remove(DeviceVault.credentialAccount); NativePendingSetup.complete() }
                 self.result.stringValue = String(describing:error); session.cancel()
             }
         }
         session.onCommitted = { [weak self] in
             guard let self = self, let binding = self.prepared else { return }
+            NativePendingSetup.complete()
             self.stage = "complete"; self.heading.stringValue = "Your display is paired."
             self.detail.stringValue = "Viewer will reconnect automatically. Remote Login is not needed."
             self.result.stringValue = "FileVault, automatic login and screen-lock settings are unchanged."
@@ -112,7 +129,14 @@ final class NativeHostSetup:NSObject,NSWindowDelegate {
         session.onClose = { [weak self] reason in
             guard let self = self, self.stage != "complete" else { return }
             if self.prepared != nil {
-                self.result.stringValue = "Setup was interrupted after approval. Your saved pairing is kept; open Viewer and Host to reconnect."
+                if NativePendingSetup.viewerID != nil {
+                    self.stage = "choose"; self.verificationCode = nil; self.codeCard?.isHidden = true
+                    self.continueButton.title = "Try Again"; self.continueButton.isEnabled = true
+                    self.result.stringValue = "Setup was interrupted. If Viewer is still waiting for setup, try again with the same iMac. Your approved credential is kept. If Viewer already paired, open it to reconnect automatically."
+                } else {
+                    self.stage = "complete"; self.continueButton.title = "Done"; self.continueButton.isEnabled = true
+                    self.result.stringValue = "Your display connected securely. Your saved pairing is ready."
+                }
             } else {
                 self.stage = "choose"; self.result.stringValue = reason; self.continueButton.title = "Try Again"; self.continueButton.isEnabled = true
                 self.codeCard?.isHidden = true; self.verificationCode = nil

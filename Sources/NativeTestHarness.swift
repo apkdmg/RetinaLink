@@ -43,7 +43,7 @@ final class NativeTestHarness:NSObject,NSApplicationDelegate {
         let paired = DeviceSettings.binding != nil
         var state:[String:Any] = ["pid":getpid(),"build":LaunchOptions.build,"stage":stage,
             "paired":paired,"code":code ?? "","localApproved":localApproved,
-            "fileVaultChanged":false,"scope":DeviceSettings.nativeTestScope!,"time":Date().timeIntervalSince1970]
+            "fileVaultChanged":false,"scope":DeviceSettings.nativeTestScope!,"pending":NativePendingSetup.viewerID != nil,"time":Date().timeIntervalSince1970]
         if let binding = DeviceSettings.binding, let data = try? nativeJSON(binding) {
             state["bindingSHA256"] = Data(SHA256.hash(data:data)).base64EncodedString()
         }
@@ -71,6 +71,10 @@ final class NativeTestHarness:NSObject,NSApplicationDelegate {
             setup.session?.cancel()
             #else
             setup.deny()
+            #endif
+        case "retry":
+            #if HOST
+            setup.advance()
             #endif
         case "export-ui":
             #if HOST

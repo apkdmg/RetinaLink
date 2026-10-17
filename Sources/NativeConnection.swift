@@ -16,6 +16,16 @@ enum NativeConnectionSettings {
     }
 }
 
+enum NativePendingSetup {
+    static let key = "nativePendingViewerID.v1"
+    static var viewerID:String? {
+        guard let id = DeviceSettings.defaults.string(forKey:key), UUID(uuidString:id) != nil else { return nil }
+        return id
+    }
+    static func begin(viewerID:String) { DeviceSettings.defaults.set(viewerID,forKey:key); DeviceSettings.defaults.synchronize() }
+    static func complete() { DeviceSettings.defaults.removeObject(forKey:key); DeviceSettings.defaults.synchronize() }
+}
+
 // All delegate callbacks are on the main run loop. Names/addresses are hints;
 // only the TLS credential or the two-screen approval can authenticate a peer.
 final class NativeDiscovery:NSObject,NetServiceBrowserDelegate,NetServiceDelegate {
@@ -58,6 +68,11 @@ enum NativeViewerEnrollment {
         }
         guard !Bundle.main.bundlePath.hasPrefix("/Volumes/") else {
             throw LinkError.invalid("Drag Viewer into Applications and open that installed copy before pairing.")
+        }
+        if DeviceSettings.nativeTestScope != nil, LaunchOptions.has("--native-test-reject-first-enrollment"),
+           !DeviceSettings.defaults.bool(forKey:"nativeTestEnrollmentFailedOnce") {
+            DeviceSettings.defaults.set(true,forKey:"nativeTestEnrollmentFailedOnce")
+            throw LinkError.invalid("Simulated first enrollment persistence failure in isolated test scope.")
         }
         // Never add an SSH key, change an OS account, or inspect personal files.
         // Keychain must save successfully before committing the binding.

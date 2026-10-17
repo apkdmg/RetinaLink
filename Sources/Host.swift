@@ -670,6 +670,7 @@ final class HostApp: NSObject, NSApplicationDelegate {
                         self.helloReceived = true
                         self.viewerSupportsUpdates = hello.automaticUpdates == true
                         if hello.directConnection == true, self.trustedCredential != nil {
+                            NativePendingSetup.complete()
                             let migrating = !NativeConnectionSettings.enabled
                             NativeConnectionSettings.enable(); self.tunnel?.stop(disconnect:true); self.tunnel = nil
                             if migrating { DispatchQueue.global(qos:.utility).async { TunnelSupervisor.disconnectExisting() } }

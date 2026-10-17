@@ -86,3 +86,23 @@ The default tests standard display setup. Add `--dedicated-display` to exercise 
 It tests fullscreen streaming/standby, Host pause/resume, window-close behavior, a verified Viewer process crash, pairing removal and re-enrollment, Host startup through its GUI login agent and recreation of the app-owned display tunnel. It does not reboot, log out, lock a display, stop Screen Sharing, run a UI capture bridge, disable FileVault, change automatic login or modify screen-lock policy. Login-agent loading in the existing GUI session is not evidence of bypassing FileVault or an actual cold-boot test.
 
 For app-only visual review, `--export-ui /absolute/file.png` renders that app’s own content view; it does not capture the desktop or other applications. Viewer `--standby-only --windowed-viewer` is a bounded preview option when paired with separate `--diagnostics-path` and `--ui-state-path` destinations. Do not leave preview/test options on a production login agent.
+
+
+## Native approval and retained direct transport (0.6.0)
+
+Use an existing owner-authenticated management SSH socket. No password is passed to these scripts, and they do not enable/disable Remote Login. The standard product no longer depends on this testing connection.
+
+```sh
+python3 Tools/test_native_pairing.py --release work/release-0.6.0-build53 \
+  --address IMAC_IP --user IMAC_USER --socket /absolute/authenticated/control \
+  --output work/native-link-test/unique-approval-test
+python3 Tools/test_native_connection.py --feed outputs/native-updates53 \
+  --address IMAC_IP --user IMAC_USER --socket /absolute/authenticated/control \
+  --output work/native-link-test/unique-installed-test --build 53
+```
+
+The first script launches the actual approval controllers with UUID-isolated preferences and Keychain services. Both local approval actions are required; cancellation and one-sided approval leave the test unpaired. It never opens the production trust service or installs test startup agents. It compares decoded test binding fields because JSON floating-point formatting differs across Foundation releases. It exports only its own app views, not the desktop.
+
+The second script uses already-signed loopback feeds to update the permanently installed apps through Sparkle, verifies binding/public authorized-keys/FileVault/login/power policy are unchanged, confirms direct 5K streaming with no app-owned SSH display master, and tests normal Host startup-agent restart plus Viewer relaunch. It preserves the original-account Viewer's disabled startup preference left by dedicated setup, rather than claiming launchd crash recovery in that account. Its loopback feed forward uses the separate test SSH connection and is removed afterward. Public hosting remains unconfigured.
+
+The one-time `update_dedicated_viewer.sh` is test-machine maintenance for the already-created `retinalinkdisplay` account. It requires the owner to authorize sudo in their own Terminal, validates a private clone of the signed/notarized Viewer, preserves the existing app on failure and replaces only that other account's app. It does not read pairing secrets or change account, encryption, automatic-login or lock policy. Normal new-user installation does not run it or require administrator SSH.

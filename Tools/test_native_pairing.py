@@ -8,6 +8,8 @@ No real credential is exported; no login, FileVault or sharing setting changes.
 import argparse
 import json
 import os
+import plistlib
+import math
 from pathlib import Path
 import shlex
 import subprocess
@@ -54,12 +56,13 @@ host_app=a.release/'build/apps/RetinaLink Host.app'
 before=remote('/usr/bin/fdesetup status; /usr/bin/defaults read local.retinalink.Viewer trustedDisplayBinding.v1 2>/dev/null | /usr/bin/shasum -a 256; /usr/bin/shasum -a 256 "$HOME/.ssh/authorized_keys" 2>/dev/null || true')
 (a.output/'production-before.txt').write_text(before)
 results=[]
-for scenario in ('cancel','approve'):
+for scenario in ('cancel','approve','resume'):
     scope=str(uuid.uuid4()).upper()
     local=a.output/scenario; local.mkdir()
     viewer_dir=remote_base+'/'+scope
     remote('mkdir -m 700 '+quote(viewer_dir))
     viewer_args=['--native-test-harness','--native-test-scope',scope,'--native-test-directory',viewer_dir,'--native-pair-port','58478']
+    if scenario=='resume': viewer_args+=['--native-test-reject-first-enrollment']
     host_args=['--native-test-harness','--native-test-scope',scope,'--native-test-directory',str(local.resolve()),'--native-test-address',a.address,'--native-pair-port','58478']
     vstate=lambda:json.loads(remote('cat '+quote(viewer_dir+'/state.json')))
     hstate=lambda:json.loads((local/'state.json').read_text())
@@ -92,11 +95,34 @@ for scenario in ('cancel','approve'):
             picture=run(ssh+['/bin/cat '+quote(viewer_dir+'/interface.png')],capture_output=True).stdout
             (local/'viewer-interface.png').write_bytes(picture)
             vcommand({'action':'approve','code':vs['code']})
+            previous_credential=None
+            if scenario=='resume':
+                partial=wait('Interrupted Host setup is resumable',hstate,lambda s:s['stage']=='choose' and s['paired'] and s.get('pending'))
+                assert not vstate()['paired'],'Injected persistence failure saved Viewer trust'
+                previous_credential=partial['testCredentialSHA256']
+                hcommand({'action':'retry'})
+                hs=wait('Retry Host verification',hstate,lambda s:s['stage']=='verify' and bool(s['code']))
+                vs=wait('Retry Viewer verification',vstate,lambda s:s['stage']=='verify' and bool(s['code']))
+                assert hs['code']==vs['code']
+                hcommand({'action':'approve','code':hs['code']});vcommand({'action':'approve','code':vs['code']})
             hs=wait('Host commits',hstate,lambda s:s['stage']=='complete' and s['paired'])
             vs=wait('Viewer commits',vstate,lambda s:s['stage']=='complete' and s['paired'])
-            assert hs['bindingSHA256']==vs['bindingSHA256'],'Binding differs'
+            # Foundation's JSON number formatting differs across macOS 11/27;
+            # compare decoded non-secret fixture fields, not encoded JSON bytes.
+            hdomain='local.retinalink.Host.NativeTest.'+scope
+            vdomain='local.retinalink.Viewer.NativeTest.'+scope
+            hp=plistlib.loads(run(['/usr/bin/defaults','export',hdomain,'-'],capture_output=True).stdout)
+            vp=plistlib.loads(run(ssh+['/usr/bin/defaults export '+quote(vdomain)+' -'],capture_output=True).stdout)
+            hb=json.loads(hp['trustedDisplayBinding.v1']);vb=json.loads(vp['trustedDisplayBinding.v1'])
+            ht=hb.pop('enrolledAt');vt=vb.pop('enrolledAt')
+            assert hb==vb and math.isclose(ht,vt,rel_tol=0,abs_tol=.000001),'Binding fields differ'
             assert hs['testCredentialSHA256']==vs['testCredentialSHA256'],'Disposable credential differs'
-            results.append({'scenario':scenario,'bothLocalApprovalsRequired':True,'sameTestBindingAndCredential':True})
+            assert not hs.get('pending'),'Pending state was not cleared after commit'
+            if previous_credential is not None: assert hs['testCredentialSHA256']==previous_credential,'Retry regenerated the approved credential'
+            results.append({'scenario':scenario,'bothLocalApprovalsRequired':True,'sameTestBindingAndCredential':True,'resumedWithOriginalCredential':previous_credential is not None})
+    except Exception:
+        hcommand({'action':'export-ui'}); time.sleep(1)
+        raise
     finally:
         hcommand({'action':'cleanup'}); vcommand({'action':'cleanup'})
         time.sleep(1)
