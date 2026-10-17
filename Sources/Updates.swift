@@ -101,14 +101,16 @@ final class AutomaticUpdater: NSObject, SPUUpdaterDelegate {
         updater?.automaticallyChecksForUpdates = enabled
         updater?.automaticallyDownloadsUpdates = enabled
         if enabled { start() }
-        publish("ready",enabled ? "Automatic updates are on. Both Macs stay paired." : "Automatic updates are off.")
+        if UpdateSettings.feed == nil { publish("not-configured","Update service will be available after release hosting is configured.") }
+        else { publish("ready",enabled ? "Automatic updates are on. Both Macs stay paired." : "Automatic updates are off.") }
     }
     func configureTestBase(_ value: String?) {
         if let value = value, UpdateSettings.validTestBase(value) { UserDefaults.standard.set(value,forKey:UpdateSettings.testKey) }
         else if value == "" { UserDefaults.standard.removeObject(forKey:UpdateSettings.testKey) }
         UserDefaults.standard.synchronize()
         if UpdateSettings.feed == nil { updater?.automaticallyChecksForUpdates = false }
-        start(); publish("ready",UpdateSettings.feed == nil ? "Update hosting is not configured." : "Update service is ready.")
+        start()
+        publish(UpdateSettings.feed == nil ? "not-configured" : "ready",UpdateSettings.feed == nil ? "Update hosting is not configured." : "Update service is ready.")
     }
     func check(installNow: Bool = false) {
         start()

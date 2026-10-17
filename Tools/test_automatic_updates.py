@@ -65,7 +65,7 @@ try:
  old=load(hostlog)['pid'];cmd=run(['/bin/ps','-p',str(old),'-o','command='],capture_output=True,text=True).stdout.strip();assert cmd.startswith(str(app/'Contents/MacOS/RetinaLink'))
  run(['/bin/launchctl','bootout','gui/'+str(os.getuid())+'/local.retinalink.host.startup'])
  wait('baseline Host exits',lambda:subprocess.run(['/bin/ps','-p',str(old)],stdout=subprocess.DEVNULL).returncode!=0,20)
- run(['/usr/bin/open','-n',app,'--args','--autostart','--test-control-directory',control,'--test-update-base-url',base])
+ run(['/usr/bin/open','-n',app,'--args','--autostart','--test-control-directory',control,'--test-update-base-url',base,'--export-ui',out/'host-updates-ui.png'])
  wait('baseline test Host streams',lambda:load(hostlog)['pid']!=old and load(hostlog)['build']==a.from_build and viewer()['phase']=='streaming')
  command('updates-automatic',enabled='false');wait('automatic update opt-out reaches Viewer',lambda:not status('Host')['automatic'] and not status('Viewer')['automatic'])
  command('updates-test-feed',url=base);wait('both roles configured with local signed feeds',lambda:status('Host')['configured'] and status('Viewer')['configured'])
