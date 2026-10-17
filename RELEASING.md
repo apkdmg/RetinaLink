@@ -1,6 +1,6 @@
 # Developer ID releases
 
-The tooling is implemented. This Mac still needs a valid **Developer ID Application** identity and an authenticated notarization profile. Apple Development certificates or signing into Xcode alone are insufficient. The working installed apps remain 0.3.0 build 43; the isolated 0.3.1 build-44 candidate is not a notarized public release.
+A valid **Developer ID Application** identity is installed for team ZPCS5VQL89. Real signed build 44 passes Host and actual iMac self-tests. Build 45 adds the classic-Keychain silent-access guard. The notarization login and Apple acceptance remain pending; the working installed apps remain 0.3.0 build 43.
 
 ## Developer setup, once
 
@@ -11,8 +11,8 @@ The tooling is implemented. This Mac still needs a valid **Developer ID Applicat
 ## Build and notarize
 
 ```sh
-python3 Tools/release.py prepare --directory work/release-0.3.1
-python3 Tools/release.py advance --directory work/release-0.3.1
+python3 Tools/release.py prepare --directory work/release-0.3.1-build45
+python3 Tools/release.py advance --directory work/release-0.3.1-build45
 ```
 
 `prepare` builds in isolation with Developer ID, Hardened Runtime and secure timestamps. It verifies both apps against Apple's Developer ID chain, the selected team and their expected bundle identifiers. Stable default designated requirements are retained; no build/certificate hash is pinned. Debugger access is rejected and no hardened-runtime exceptions are added. Other signing certificate types cannot create a distribution build.
@@ -21,7 +21,7 @@ python3 Tools/release.py advance --directory work/release-0.3.1
 
 After Viewer is accepted, the tool staples its ticket, validates it and checks Gatekeeper. It embeds the stapled Viewer ZIP into Host, re-signs Host, then submits Host. Once Host is accepted, its ticket is stapled and validated. The tool extracts the **exact bundled Viewer ZIP** and verifies its ticket, signature and executable hash again before creating a Host-only distribution ZIP. ZIP containers cannot themselves be stapled; their app tickets must be inside them. Re-running a completed release does not regenerate its archive.
 
-Output: `work/release-0.3.1/RetinaLink-0.3.1.zip`. Its SHA-256, accepted submission IDs, source commit and dirty-tree status are recorded in `release-state.json`. Commit source before a public release. These tools submit compiled software to Apple; they do not publish it or replace either installed app.
+Output: `work/release-0.3.1-build45/RetinaLink-0.3.1.zip`. Its SHA-256, accepted submission IDs, source commit and dirty-tree status are recorded in `release-state.json`. Commit source before a public release. These tools submit compiled software to Apple; they do not publish it or replace either installed app.
 
 ## Preserve trust across updates
 
@@ -33,9 +33,9 @@ The existing ad-hoc installation requires a **one-time transition**: complete Ho
 
 ## Validation status
 
-The isolated build-44 Host self-tests, actual AMD iMac Viewer self-tests, simulated capture-denial recovery and nine offline release-policy tests pass. The iMac correctly rejects the ad-hoc test app against the Developer ID requirement. The tests cover wrong-team/Host/namespace rejection, changed upload detection, resume without duplicate submission, rejection/Gatekeeper failure and Viewer-ticket-before-Host-signing order. They are not evidence of Apple's acceptance or a signed-to-signed update.
+Actual Developer ID build-44 Host and AMD iMac Viewer self-tests, simulated capture-denial recovery and nine offline release-policy tests pass. A native Launch Services probe verifies two different signed binaries with the real Host designated requirement can share a temporary test item silently, while an ad-hoc clone is denied when the classic-Keychain interaction guard is applied. All temporary items were removed; production credentials were never accessed by that probe. The iMac correctly rejects the ad-hoc test app against the Developer ID requirement. The tests cover wrong-team/Host/namespace rejection, changed upload detection, resume without duplicate submission, rejection/Gatekeeper failure and Viewer-ticket-before-Host-signing order. They are not evidence of Apple's acceptance or a signed-to-signed update.
 
-After the certificate/profile is available, produce accepted/stapled build 44, enroll once, then produce a distinct signed build with `prepare --build-number 45 --directory work/release-upgrade-45` and complete notarization. Replace Host and test native login-agent capture, Host-side Viewer update, unchanged binding/public authorized key, resumed 5K streaming and tunnel/crash recovery through SSH. Never copy private keys or stream credentials into evidence. The UI capture helper stays off.
+After the profile is available, finish notarizing the existing baseline in `work/release-0.3.1` (build 44), enroll once, then notarize the final build 45 in `work/release-0.3.1-build45`. Replace Host and test native login-agent capture, Host-side Viewer update, unchanged binding/public authorized key, resumed 5K streaming and tunnel/crash recovery through SSH. Never copy private keys or stream credentials into evidence. The UI capture helper stays off.
 
 ## Apple references
 

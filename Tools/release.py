@@ -13,6 +13,7 @@ import plistlib
 import subprocess
 import sys
 import tempfile
+import time
 
 from signing import identities, select_identity, sign, verify_app
 
@@ -56,6 +57,14 @@ def credentials(args):
     print('Enter an app-specific password at Apple’s secure prompt. RetinaLink does not read or save it.')
     run(['/usr/bin/xcrun', 'notarytool', 'store-credentials', args.profile,
          '--apple-id', apple_id, '--team-id', identity['team'], '--validate'])
+    # Verify the same profile immediately; a successful interactive command
+    # must not be mistaken for a usable saved login in another context.
+    notary(['history'], args.profile)
+    marker = ROOT/'work/notary-credentials-ready.json'
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text(json.dumps({'profile':args.profile, 'team':identity['team'],
+                                 'authenticated':True, 'time':time.time()}, indent=2)+'\n')
+    print('Saved and verified notarization profile: '+args.profile)
 
 
 def doctor(args):
@@ -191,7 +200,9 @@ def main():
     parser.add_argument('command', choices=['doctor', 'credentials', 'prepare', 'advance'])
     parser.add_argument('--identity', default=os.environ.get('RETINALINK_SIGN_IDENTITY'))
     parser.add_argument('--profile', default=os.environ.get('RETINALINK_NOTARY_PROFILE', PROFILE))
-    parser.add_argument('--directory', type=pathlib.Path, default=ROOT/'work/release-0.3.1')
+    version = json.loads((ROOT/'Resources/Release.json').read_text())
+    parser.add_argument('--directory', type=pathlib.Path,
+                        default=ROOT/f'work/release-{version["version"]}-build{version["build"]}')
     parser.add_argument('--build-number', type=int)
     args = parser.parse_args()
     if args.build_number is not None and args.build_number < 1:

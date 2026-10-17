@@ -74,7 +74,25 @@ enum DeviceVault {
     // Ad-hoc development builds have hash-specific Keychain ACLs, so they must
     // re-enroll instead of silently asking to trust a changed executable.
     static var service: String { Bundle.main.object(forInfoDictionaryKey:"RetinaLinkTrustNamespace") as? String ?? "local.retinalink.development.\(LaunchOptions.build)" }
+    private static let accessLock = NSLock()
+    static func silently<T>(_ operation: () throws -> T) throws -> T {
+        accessLock.lock(); defer { accessLock.unlock() }
+        // SecItem defaults to the classic Mac keychain. Its shim does not
+        // reliably honor the per-query authentication-UI flag. Suppress UI
+        // for this operation too, restoring the prior process setting on all
+        // exits. Serialize our writes/removals against this scoped setting.
+        var previousUI: DarwinBoolean = false
+        let previousStatus = SecKeychainGetUserInteractionAllowed(&previousUI)
+        guard previousStatus == errSecSuccess else { throw LinkError.invalid("Could not read trusted display silently (\(previousStatus)). Unlock your login Keychain and retry.") }
+        defer { _ = SecKeychainSetUserInteractionAllowed(previousUI.boolValue) }
+        let suppressStatus = SecKeychainSetUserInteractionAllowed(false)
+        guard suppressStatus == errSecSuccess else { throw LinkError.invalid("Could not read trusted display silently (\(suppressStatus)). Unlock your login Keychain and retry.") }
+        return try operation()
+    }
     static func read(_ account: String) throws -> Data? {
+        try silently { try readSilently(account) }
+    }
+    private static func readSilently(_ account: String) throws -> Data? {
         let query: [String:Any] = [kSecClass as String:kSecClassGenericPassword,
             kSecAttrService as String:service,kSecAttrAccount as String:account,
             kSecReturnData as String:true,kSecMatchLimit as String:kSecMatchLimitOne,
@@ -88,6 +106,7 @@ enum DeviceVault {
         return bytes
     }
     static func write(_ bytes: Data, account: String) throws {
+        accessLock.lock(); defer { accessLock.unlock() }
         let key: [String:Any] = [kSecClass as String:kSecClassGenericPassword,
             kSecAttrService as String:service,kSecAttrAccount as String:account]
         let status = SecItemUpdate(key as CFDictionary,[kSecValueData as String:bytes] as CFDictionary)
@@ -99,6 +118,7 @@ enum DeviceVault {
         } else if status != errSecSuccess { throw LinkError.invalid("Could not update device trust (\(status)).") }
     }
     static func remove(_ account: String) {
+        accessLock.lock(); defer { accessLock.unlock() }
         SecItemDelete([kSecClass as String:kSecClassGenericPassword,kSecAttrService as String:service,kSecAttrAccount as String:account] as CFDictionary)
     }
     static var credentialAccount: String {

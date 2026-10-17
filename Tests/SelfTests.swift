@@ -3,6 +3,7 @@ import AppKit
 import Network
 import Metal
 import CoreVideo
+import Security
 
 func check(_ condition: @autoclosure () throws -> Bool, _ reason: String) throws {
     if try !condition() { throw LinkError.invalid(reason) }
@@ -103,6 +104,17 @@ func runSelfTests() throws {
 }
 
 func runSetupTests() throws {
+    var originalUI: DarwinBoolean = false
+    try check(SecKeychainGetUserInteractionAllowed(&originalUI) == errSecSuccess,"Could not inspect process Keychain interaction state")
+    let marker = try DeviceVault.silently { () throws -> Int in
+        var currentUI: DarwinBoolean = true
+        try check(SecKeychainGetUserInteractionAllowed(&currentUI) == errSecSuccess && !currentUI.boolValue,"Classic Keychain dialogs were not suppressed")
+        return 7
+    }
+    try expectInvalid { try DeviceVault.silently { throw LinkError.invalid("Expected test failure") } }
+    var restoredUI: DarwinBoolean = false
+    try check(marker == 7 && SecKeychainGetUserInteractionAllowed(&restoredUI) == errSecSuccess && restoredUI.boolValue == originalUI.boolValue,"Silent Keychain access did not restore the previous state after success/error")
+    print("PASS: classic Keychain dialog guard suppresses interaction and restores the prior process state on success and failure; no stored secrets accessed")
     try check(FileVaultState(output:"FileVault is On.") == .on,"FileVault on detection")
     try check(FileVaultState(output:"FileVault is Off.") == .off,"FileVault off detection")
     try check(FileVaultState(output:"permission denied") == .unknown,"Unknown FileVault must not be called off")
