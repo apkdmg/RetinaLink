@@ -404,3 +404,12 @@ Build 52 is signed, notarized and stapled. Its installed Host passes native self
 The temporary diagnostic SSH key cannot open a shell or forward ports. `Tools/test_dedicated_display.py` checks console account, standard-account membership, first-sign-in enrollment consumption, fullscreen pairing, idle policy, idle-sleep assertion, Viewer restart recovery, and a display-sleep/wake request. The helper’s explicit test path also exercises off/on recovery before first login. Never print or collect pending enrollment contents, `/etc/kcpassword`, the root recovery record, or account passwords.
 
 The lock preference is configured, but this is not proof of password-free wake: `sysadminctl -screenLock status` still reports an immediate delay. Actual login/keybag and wake behavior need verification in the new account after its first automatic sign-in.
+
+
+## Drag-to-Applications DMG (October 18, 2026)
+
+`outputs/RetinaLink-0.5.0.dmg` packages the existing 0.5.0 build-52 Host, including its exact stapled Viewer archive. Neither app was rebuilt or installed by packaging. The outer DMG is Developer ID signed, accepted by Apple (submission `19ccc96d-dc35-4aa4-9724-331bd6e78578`), stapled and accepted by Gatekeeper as Notarized Developer ID. Its SHA-256 is recorded in the adjacent `.dmg.sha256` and `RetinaLink-0.5.0-DMG.json` files.
+
+The exact final image passes filesystem checksum verification, strict/deep same-team Host signature checks, Host ticket/Gatekeeper checks, embedded Viewer digest/signature/ticket/Gatekeeper checks, and a disposable drag-copy equivalent of Host that preserves its executable, identity and ticket. Finder metadata has the expected three items, fixed icon positions, custom 1x/2x background, hidden toolbar/sidebar/status bar and `/Applications` symlink. The illustrative layout preview is rendered from our own artwork and icons, not captured from Finder; no human drag/drop or launch from a freshly downloaded/quarantined DMG was tested. Nineteen offline release/update/DMG policy tests pass, including rejection of changed submitted/final images and incomplete/rejected releases.
+
+The DMG includes an offline Setup Guide that explicitly says Remote Login must remain enabled for the current SSH transport. Packaging does not implement the proposed app-owned connection without SSH, change the installed apps or pairing, grant permissions, enable a UI capture helper, or restart either Mac. The previously deferred dedicated-mode reboot/first-login/wake checks remain deferred.

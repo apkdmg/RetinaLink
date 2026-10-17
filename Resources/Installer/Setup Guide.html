@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'">
+<title>Set up your display · RetinaLink</title>
+<style>
+ :root { color-scheme:light dark; font:16px/1.65 -apple-system,BlinkMacSystemFont,sans-serif; color:#202535; background:#f4f6fb }
+ * { box-sizing:border-box } body { margin:0; padding:64px 24px; background:radial-gradient(ellipse at top right,#dce7ff99,transparent 65%) }
+ main { max-width:760px; margin:auto } .brand { font-weight:650; letter-spacing:-.5px; font-size:21px; color:#4255ce }
+ h1 { font-size:42px; line-height:1.13; letter-spacing:-1.7px; margin:22px 0 16px } h2 { font-size:22px; line-height:1.3; letter-spacing:-.5px; margin:0 0 12px }
+ p { margin:10px 0 } .intro { font-size:19px; color:#596172; max-width:640px; margin-bottom:32px }
+ section { background:#ffffffb8; border:1px solid #fff; box-shadow:0 12px 40px #2f456008; border-radius:24px; padding:30px; margin:18px 0; backdrop-filter:blur(24px) }
+ ol { padding-left:23px; margin-bottom:0 } li { padding-left:7px; margin:14px 0 } strong { font-weight:650 } .note { color:#596172; font-size:14px }
+ .pill { display:inline-block; font-size:12px; font-weight:650; padding:4px 11px; border-radius:20px; background:#e9edff; color:#4255ce; margin-bottom:16px }
+ a { color:#3958ce; text-underline-offset:3px } footer { font-size:13px; color:#667080; padding:16px 4px }
+ @media(prefers-color-scheme:dark) { :root{background:#171a23;color:#eff1fa} body{background:radial-gradient(ellipse at top right,#3a417544,transparent 65%)} section{background:#272c37b8;border-color:#ffffff12} .intro,.note,footer{color:#b5bfd0} .brand,a{color:#a9b8ff} .pill{background:#394264;color:#d1d9ff} }
+ @media(max-width:540px) { body{padding:32px 18px} h1{font-size:34px} section{padding:22px} }
+</style>
+<main>
+ <div class="brand">RetinaLink</div>
+ <h1>Your iMac.<br>A second display.</h1>
+ <p class="intro">Install Host on your main Mac. Host includes Viewer and guides you through installing it on your iMac.</p>
+ <section>
+  <span class="pill">Start on your main Mac</span>
+  <h2>Drag. Open. Add your display.</h2>
+  <ol>
+   <li>Drag <strong>RetinaLink Host</strong> onto the <strong>Applications</strong> folder in the installer window.</li>
+   <li>Open <strong>RetinaLink Host from Applications</strong>, then choose <strong>Add Display</strong>. You can eject the installer after copying.</li>
+   <li>On a new iMac, sign in and enable <strong>Remote Login</strong> under <strong>System Preferences → Sharing</strong>. Choose <strong>Only these users</strong> and allow the account you will use for setup. On newer macOS, Sharing is under System Settings → General.</li>
+   <li>Back on Host, select your iMac and enter its account name. Verify the Mac’s identity and enter its password in the secure authentication dialog when asked. Host installs Viewer and saves the pairing.</li>
+   <li>Allow <strong>Screen Recording</strong> for Host when macOS asks. Viewer does not require Screen Recording. Use <strong>Arrange Displays</strong> to place your new display.</li>
+  </ol>
+  <p class="note">Host requires an Apple silicon Mac with macOS 13 or later. Viewer supports Intel macOS Catalina 10.15 or later and Apple silicon macOS 11 or later. Keep both Macs on a trusted network; wired Gigabit Ethernet is recommended for 5K.</p>
+ </section>
+ <section>
+  <span class="pill">Know before you connect</span>
+  <h2>Why does RetinaLink need Remote Login?</h2>
+  <p>This version uses Apple’s encrypted SSH service to install Viewer, manage it and carry the display connection. <strong>Remote Login must remain enabled on the iMac while you use RetinaLink.</strong> It is not just a one-time installation requirement. Host does not need Remote Login enabled.</p>
+  <p>Remote Login is a general macOS remote-access service. People with an allowed account’s valid credentials may be able to sign in remotely. RetinaLink’s saved streaming key is restricted to its display tunnel and cannot open a shell, but enabling the service is still a decision you should be comfortable with.</p>
+  <p>Choose <strong>Only these users</strong> rather than allowing every account. Full disk access for remote users is not required. Do not expose Remote Login through your router. On a company Mac, check with your IT team.</p>
+  <p>If you prefer to leave Remote Login off, <strong>this release cannot provide Host-managed setup or its automatic display connection.</strong> A connection without SSH would require a future Viewer connection service; it is not included in this installer.</p>
+  <p class="note"><a href="https://support.apple.com/guide/mac-help/allow-a-remote-computer-to-access-your-mac-mchlp1066/mac">Apple’s Remote Login instructions</a>. Turning Remote Login off disconnects this version of RetinaLink. Turning it back on normally allows the saved pairing to reconnect.</p>
+ </section>
+ <section>
+  <h2>Ready whenever you sign in</h2>
+  <p>Enable Viewer startup during setup. Viewer opens fullscreen after sign-in, reconnects to your trusted Mac and shows a quiet waiting screen when the Host is unavailable. There is no daily pairing code or Connect button on the iMac.</p>
+  <p><strong>FileVault is never changed.</strong> With FileVault enabled on an Intel iMac, someone must unlock its disk locally after a restart before Viewer can run.</p>
+  <p>For a retired Intel iMac running Catalina or Big Sur with FileVault already off, the optional <strong>Dedicated Display Setup</strong> creates a separate non-administrator account and configures automatic login. Anyone with physical access can use that account; keep personal files out of it. Your administrator must approve this option. Setup does not create partitions or install another copy of macOS.</p>
+  <p class="note">Dedicated account provisioning and off/on recovery have passed on the test iMac. Physical restart, first automatic sign-in and password-free wake verification remain pending. Native 5K at 60 updates per second is a target; stable physical 60 fps across all workloads has not been established.</p>
+ </section>
+ <section>
+  <h2>Already using RetinaLink?</h2>
+  <p>Keep Host in its existing permanent Applications location and use its update controls where available. Pairing is retained between compatible releases signed by the same developer. If you already installed it in your home Applications folder, avoid keeping a second copy in the system Applications folder.</p>
+  <p>Host handles Viewer updates. Public automatic-update hosting is not configured in this test release.</p>
+ </section>
+ <footer>RetinaLink @VERSION@ · build @BUILD@ · Developer ID signed and Apple-notarized apps. macOS still controls first-run permission prompts.</footer>
+</main>
+</html>

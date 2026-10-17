@@ -1,6 +1,8 @@
 # RetinaLink
 
-RetinaLink 0.4.0 build 48 adds signed automatic updates for both Host and Viewer, with all controls on Host. Real SSH tests on the Mac Studio and Big Sur iMac pass for automatic installation, rejected feed/archive signatures, opt-out, retained pairing and startup/crash recovery. Both installed apps are Developer ID signed and Apple-notarized. Public hosting is deliberately unconfigured pending the owner’s choice. See [AUTOMATIC_UPDATES.md](AUTOMATIC_UPDATES.md).
+The latest packaged candidate is **0.5.0 build 52**, available as a signed, notarized drag-to-Applications DMG in `outputs/RetinaLink-0.5.0.dmg`. Host includes Viewer; the DMG is used only on the main Mac. Dedicated account provisioning has passed, but physical restart, first automatic sign-in and password-free wake verification remain pending. See [VALIDATION.md](VALIDATION.md).
+
+RetinaLink 0.4.0 build 48 introduced signed automatic updates for both Host and Viewer, with all controls on Host. Real SSH tests on the Mac Studio and Big Sur iMac pass for automatic installation, rejected feed/archive signatures, opt-out, retained pairing and startup/crash recovery. Both installed apps are Developer ID signed and Apple-notarized. Public hosting is deliberately unconfigured pending the owner’s choice. See [AUTOMATIC_UPDATES.md](AUTOMATIC_UPDATES.md).
 
 Turn a Retina iMac into an unattended second display, with setup and daily controls on the main Mac. Host installs Viewer over an authenticated SSH connection, establishes saved device trust, and manages its display connection automatically. Viewer stays fullscreen, shows a quiet standby screen when disconnected, and reconnects without a mouse, keyboard, pairing code or Connect button on the iMac.
 
@@ -8,15 +10,21 @@ Host requires Apple silicon and macOS 13+. Viewer supports Intel macOS Catalina 
 
 ## Set up from Host
 
-1. Put **RetinaLink Host.app** in Applications and open it on the main Mac. The compatible Viewer installer is inside Host; there is no separate Viewer download to find.
+1. Open the RetinaLink DMG on the main Mac and drag **RetinaLink Host** onto **Applications**. Open Host from Applications, then eject the DMG. The compatible Viewer installer is inside Host; there is no separate Viewer download to find. Existing users should update their original permanent app location to avoid duplicate copies.
 2. Choose **Add Display**. Select a nearby Mac or enter the iMac’s local hostname/IP address and its account’s short username.
-3. If this is a new iMac installation, enable **Remote Login** in its Sharing preferences once. RetinaLink cannot enable a remote-access service on an inaccessible Mac. All subsequent RetinaLink setup is driven from Host. Enter any requested SSH password or key passphrase in the native dialog on the main Mac; RetinaLink does not save it.
+3. If this is a new iMac installation, enable **Remote Login** in its Sharing preferences. It must **stay enabled while using this version**, because SSH carries both setup operations and the ongoing display connection. Choose **Only these users** and allow the account used for setup, rather than every user. Full disk access for remote users is not required. RetinaLink cannot enable a remote-access service on an inaccessible Mac. All subsequent RetinaLink setup is driven from Host. Enter any requested SSH password or key passphrase in the native dialog on the main Mac; RetinaLink does not save it.
 4. Setup checks macOS compatibility and FileVault before installing. Read the restart explanation and choose startup preferences. **Set Up Display** copies and verifies Viewer, saves device credentials in Keychain, installs the selected per-user login agents and starts Viewer fullscreen.
 5. Allow Screen Recording for Host if macOS asks. Viewer does not need screen-capture permission. Arrange the extended desktop from **Arrange Displays** on Host.
 
 Normal installation does not create disks, volumes, partitions or another macOS installation. Standard setup does not change FileVault, account passwords, automatic login, screen locking, SSH server settings, SIP, Gatekeeper or system trust settings. The optional dedicated setup described below creates a separate standard account and changes only its login/idle policy after explicit administrator authorization. Apps are installed for the current user; no root daemon is installed.
 
 The current stable app paths are `~/Applications/RetinaLink Host.app` on the Studio and `~/Applications/RetinaLink Viewer.app` on the iMac. Installing Host somewhere permanent avoids a login agent pointing into a temporary Downloads directory.
+
+### Remote Login is a current product limitation
+
+The DMG simplifies installing Host; it does not remove the iMac's SSH requirement. Remote Login is a general macOS service: allowed users with valid credentials can log in remotely. RetinaLink restricts its own saved streaming key, but that restriction does not restrict every other authentication method accepted by macOS. Use a trusted network and do not expose SSH through a router. On company-managed Macs, ask the administrator. If the owner does not accept Remote Login, this release cannot offer its Host-managed setup or automatic connection.
+
+The preferred future consumer flow is a one-time signed Viewer installation on the iMac, followed by explicit approval of the Host and an app-owned authenticated connection. Host could then manage pairing, startup, reconnection and signed Viewer updates without general Remote Login. That requires a new Viewer connection/enrollment service and compatibility/security testing; it is **not implemented** by the DMG. Account creation and automatic login would still require local administrator authorization. Until that exists, do not present enabling SSH as temporary or hide it behind an installer.
 
 ## Everyday use
 

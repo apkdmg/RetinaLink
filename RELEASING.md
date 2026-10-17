@@ -1,6 +1,25 @@
 # Developer ID releases
 
-The current release is **0.4.0 build 48**, signed by team ZPCS5VQL89 and notarized with all Sparkle installer/XPC helpers. The actual automatic build-46 to build-48 update passes on both Macs without re-pairing or another Screen Recording approval. Host owns the update toggle and Update Now action; Viewer stays unattended. Public update hosting remains unconfigured, as requested. See [AUTOMATIC_UPDATES.md](AUTOMATIC_UPDATES.md) for signed-feed publication.
+The latest packaged candidate is **0.5.0 build 52**, with Host-managed dedicated-account provisioning. Its drag-to-Applications DMG contains the unchanged notarized Host and embedded Viewer. Dedicated physical restart and password-free wake checks remain deferred; do not describe those as passed. The completed 0.4.0 update checks below are historical evidence, not evidence of every 0.5.0 flow.
+
+## Build the consumer DMG
+
+After `release.py advance` has completed both app tickets and embedded the stapled Viewer, package those exact binaries:
+
+```sh
+python3 -m venv work/dmg-tools
+work/dmg-tools/bin/python -m pip install -r Tools/dmg-requirements.txt
+work/dmg-tools/bin/python Tools/package_dmg.py prepare \
+  --release work/release-0.5.0-build52 --directory work/dmg-0.5.0-build52
+work/dmg-tools/bin/python Tools/package_dmg.py advance \
+  --directory work/dmg-0.5.0-build52 --output outputs/RetinaLink-0.5.0.dmg
+```
+
+`advance` submits once, then returns exit code 3 while Apple processes the DMG. Repeat that command later to check the saved submission; it never rebuilds a submitted image. Upon acceptance it staples and validates the DMG ticket, checks Gatekeeper, verifies the mounted Host and embedded Viewer, checks Finder layout and the Applications symlink, and verifies a disposable copy of Host. The source app signatures, identifiers, pairing namespace and embedded Viewer archive are unchanged. Nothing is installed or launched. The image includes an offline Setup Guide with the ongoing Remote Login requirement and FileVault/restart limitations.
+
+`Tools/MakeInstallerArtwork.swift` renders the 1x/2x background and an illustrative layout preview from our own assets. `dmgbuild` writes Finder metadata without Finder automation or a UI capture helper. The preview is a layout rendering, not a screenshot of Finder. Use a fresh `--directory` for a changed design; never overwrite a signed/submitted release. `verify` checks the final digest, signature, staple and Gatekeeper verdict and can export the identical completed image. Artwork and copy-only changes do not require rebuilding or updating the installed apps. Public update feeds still use role-specific ZIP archives, not this DMG.
+
+The previous update-validation release is **0.4.0 build 48**, signed by team ZPCS5VQL89 and notarized with all Sparkle installer/XPC helpers. The actual automatic build-46 to build-48 update passes on both Macs without re-pairing or another Screen Recording approval. Host owns the update toggle and Update Now action; Viewer stays unattended. Public update hosting remains unconfigured, as requested. See [AUTOMATIC_UPDATES.md](AUTOMATIC_UPDATES.md) for signed-feed publication.
 
 A valid **Developer ID Application** identity is installed for team ZPCS5VQL89. Real signed builds 44 and 45 pass Host and actual iMac self-tests. Build 45 adds the classic-Keychain silent-access guard. Apple has accepted both apps in both builds. Tickets are stapled and validated, Gatekeeper reports Notarized Developer ID, and the exact bundled Viewer ticket survives extraction. The actual build-44 to build-45 Host/Viewer update passes, including retained pairing, native startup and Viewer crash recovery without another Screen Recording approval.
 
