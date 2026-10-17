@@ -1,72 +1,90 @@
-# RetinaLink 0.2.8 build 22 — validation, 17 October 2026
+# RetinaLink 0.2.9 build 30 — validation, 17 October 2026
 
-## Outcome
+## Outcome and limits
 
-**Lossless packing and total Host processing are faster. Stable native 5K60 across desktop workloads has not been achieved.** The installed release is 0.2.8 build 22 on both Macs. Tests, deployment, automatic reconnection and log collection were performed through the existing SSH session; no manual log copying was needed.
+**The iMac upload path is faster and byte-exact. Stable native 5K60 across desktop workloads has not been achieved.** The blocking operation behind a sustained slow source run is now identified: the source app waits for reusable Core Animation drawables before it can draw. The internal WindowServer/driver reason for holding those drawables remains unresolved. The earlier rare 245 ms iMac submission stall was not reproduced in an unprofiled final trial, so its exact cause is not claimed to be fixed.
 
-The measured machines are a 2023 M2 Max Mac Studio running macOS 27.0.1 and a Late-2014 Retina iMac running Big Sur 11.7.8 with AMD Radeon R9 M290X. Tests retain native 5120 × 2880 capture, a 5120 × 2880 fullscreen iMac drawable, vsync and encrypted five-digit pairing. Data crosses the wired LAN through the existing SSH reverse tunnel. Screen Sharing remained connected. Background system/capture activity was not fully controlled.
+All installation, motion tests, reconnection and log collection used the existing authorized SSH session. The machines remain a 2023 M2 Max Studio on macOS 27.0.1 and a 2014 Retina iMac on Big Sur 11.7.8 / Radeon R9 M290X. Native dimensions, encrypted pairing, the SSH Ethernet route and physical Viewer vsync are retained. Screen Sharing remained connected. No security or sharing settings were changed. Other capture clients remain a limitation of the environment.
 
-## Processing improvement
+The final iMac executable and Host are build 30. Earlier builds 23–29 are diagnostic/test controls. Requested refresh, generated frames, completed capture samples, GPU completions and positive presentation timestamps are kept distinct. No camera-based input-to-photon or physical frame-identity measurement was made.
 
-These 90-second trials use build 19 on both endpoints and the same fullscreen Core Animation bitmap-text scroll. Each trace analysis excludes the first five and final two seconds. The serial control is repeated after the parallel candidate because system frame rates vary.
+## Upload improvements, isolated on the actual iMac
 
-| Packing | Capture/s | Presented fps | Encode + pack | Lossless pack | Viewer unpack |
-|---|---:|---:|---:|---:|---:|
-| Serial, pass A | 46.77 | 45.61 | 8.69 ms | 4.69 ms | 3.03 ms |
-| Parallel | 55.58 | 54.49 | 6.09 ms | 2.59 ms | 2.55 ms |
-| Serial, pass B | 55.56 | 54.48 | 7.93 ms | 4.66 ms | 3.12 ms |
+A standalone universal probe feeds the production DisplayView uncompressed, native 5K test packets at 60 Hz, with three bounded GPU credits. It removes capture, networking and LZ4 decoding. Full phases upload all 920 tiles; sparse phases upload two. A small tile alternates each frame. Packet preparation is timed separately. Each phase is bounded and the app exits normally afterward.
 
-Against the later control, packing takes about **44% less time**, total encode + pack about **23% less**, and Viewer unpacking about **18% less**. Presented FPS is essentially unchanged in that comparable pair. The slower first control must not be used to imply an isolated FPS improvement.
+Build 27 repeats the old per-tile path around the coalesced path; each run has full/sparse/full phases of 15 seconds. Discard three seconds after each phase starts and its last second. Full-frame GPU execution in the two full phases was:
 
-Large frames are split into four independently compressed LZ4 chunks, with parallel compression/decompression and owned output buffers. Small frames use the existing serial path. A capability in the greeting gates the new format, so older Viewers receive the original packets. BC7 tile bytes and image-quality settings are unchanged; the outer packet bytes naturally differ. In the matched pair payload throughput was 447.4 versus 444.9 Mbps at almost identical delivered rates, so the chunking did not introduce a large bandwidth penalty for this workload. High-entropy content can differ.
+| Control | First full phase | Last full phase |
+|---|---:|---:|
+| Old per-tile, cached, A | 6.53 ms | 6.56 ms |
+| Coalesced, cached, B | 3.67 ms | 3.58 ms |
+| Old per-tile, cached, C | 6.25 ms | 6.52 ms |
 
-Viewer callbacks now retain only identity/dimensions after upload rather than full decoded 5K buffers. GPU dirty flags use boolean stores instead of read/modify/write. The latter preserves output and static suppression but has no demonstrated isolated FPS gain. The capture configuration and bounded three-frame protocol remain unchanged from 0.2.7.
+Coalescing reduces 920 blits to 23 horizontal rectangles for a full 5K frame, roughly **44% less GPU time** in this workload. It never joins across an unchanged hole or tile-row boundary. Sparse frames retain small transfers. CPU staging was similar in this first comparison; this is not a CPU-speed or overall-FPS claim.
 
-## Where capture gaps originate
+Build 29 then holds coalescing constant, caches the staging destination pointer once and compares 30-second full-frame runs with different CPU cache policies:
 
-A 90-second capture-only trial that immediately releases buffers reached **59.96 complete samples/s**. It encoded and displayed no frames. A separate 90-second trial that captures, encodes and packs but discards packets reached **54.97 complete samples/s**, with no sent frames or ACK-dependent credits. Thus the capture-rate reduction can occur with networking and Viewer processing removed.
+| Staging memory | CPU upload setup | GPU execution |
+|---|---:|---:|
+| Cached, A | 6.01 ms | 3.75 ms |
+| Write-combined, B | 4.75 ms | 3.76 ms |
+| Cached, C | 6.04 ms | 3.81 ms |
 
-The complete-frame source timestamps themselves contain 33.3 ms gaps. Idle callbacks contain no image to recover. Apple's [idle status documentation](https://developer.apple.com/documentation/screencapturekit/scframestatus/idle) identifies these as cases without a new display image. This localizes the missing-frame problem to capture/frame-production pacing under Host processing load; it is not simply a backlog of valid images waiting on the application's capture callback queue. It does **not** establish the exact WindowServer, driver, surface-lifetime or competing-capture cause.
+Write-combined staging takes about **21% less CPU setup time** against both controls. CPU only writes this memory; it is not read back or reused before GPU completion. Build 30 defaults to coalescing and write-combined memory. `--tile-blits` and `--cached-upload` provide independent controls.
 
-In the final real AppKit-window trial the source issued **59.96 position changes/s**, but capture averaged **44.95/s**, with **zero credit-limit skips** and an **8.7 ms average ACK cycle**. Issuing positions is not independent proof that WindowServer presented all of them. It does show why increasing network throughput or the credit count cannot solve that run.
+These are stage-cost improvements, not proof of end-to-end 60 fps. Several standalone runs reported 60 rendered updates/s but zero positive presentation timestamps for an initial phase or an entire control. Build 29 recorded visible window, visible occlusion state, active Space and awake display even during one such run. A separate system query confirmed the iMac's single active, built-in 5120 × 2880 screen at scale 2, console user opsounimas, and nominal thermal state. That query's reported refresh value is zero, not a claim that the panel has a zero-Hz mode. The zero-timestamp runs cannot support a physical-presentation claim. Positive-counter runs did reach about 60 fps, but they are not substituted for slower or invalid-presentation trials.
 
-## Where acknowledgement tails originate
+## Capture gaps: stronger controls and corrected inference
 
-Per-frame metadata links packing, body receipt, decoding, drawable acquisition, GPU work, presentation and ACKs by sequence number. Elapsed intervals are measured on each machine independently, avoiding reliance on synchronized wall clocks.
+The preceding release compared separate capture-only and encode-only runs at about 60 and 55 captures/s. That correlation did not isolate encoding as the cause. This release uses one continuous capture stream and one source, switching processing in 30-second phases:
 
-- In `trace18-quiet-b`, one ACK cycle took **264.7 ms**. Viewer work accounted for **254.4 ms**; the pre-submit-to-GPU-start interval was **244.7 ms**, while actual GPU execution was **4.4 ms** and its completion callback followed promptly. The old trace location includes CPU presentation/submission calls, so this frame does not prove that all 244.7 ms was GPU scheduling. It does isolate the large delay to the iMac presentation/submission path rather than LAN transfer.
-- In `trace18-quiet-a`, another **74.6 ms** cycle contained **48.1 ms** of Viewer body assembly and only **10.0 ms** of post-receive Viewer work. Transfer/TLS/SSH and endpoint scheduling can therefore create a different kind of tail.
-- Build 20 separates presentation-call time and command-commit time from GPU-start timing. In its default scroll trial presentation calls averaged **0.030 ms** (maximum **0.185 ms**) and commit calls **0.012 ms** (maximum **0.097 ms**). Completion callbacks averaged **0.068 ms** after GPU end. The earlier 245 ms outlier did not recur in that trial; its exact internal cause remains unresolved.
+| Phase | Complete captures/s | Source draws/s | Processing |
+|---|---:|---:|---:|
+| Release capture buffers | 59.18 | 59.17 | 0 ms |
+| Hold buffer for about 6.7 ms | 59.39 | 59.35 | 6.70 ms |
+| GPU encode captured surface + pack | 59.91 | 59.91 | 6.70 ms |
+| GPU encode independent copied surface + pack | 60.00 | 59.98 | 6.66 ms |
+| GPU encode captured surface again | 59.95 | 59.95 | 6.75 ms |
+| CPU-only pack cached output | 56.87 | 56.88 | 2.04 ms |
+| Release capture buffers again | 57.68 | 57.63 | 0 ms |
 
-The transport residual subtracts Viewer elapsed work from Host ACK-cycle elapsed time. It includes TLS/SSH, transfer and unclassified endpoint overhead, including Host ACK application time. It is not pure network RTT and does not identify the company switch as the cause.
+No frames are transmitted during this probe; it is not a display-throughput result. There was no mailbox coalescing. Capture tracks source production even when no work is done. Holding the input or GPU-encoding it did not, by itself, lower the rate in this matched trial. Deep-copy correctness and row stride were tested separately.
 
-Quiet/poll/quiet scrolling trials averaged **54.45 / 54.15 / 51.66 presented fps**. Two-second SSH polling did not show a consistent penalty. Viewer GPU callbacks were consistently prompt. Raising the requested animation rate to 60 did not establish an improvement: build 20's explicit-source-hint trial averaged 49.50 presented fps versus 57.71 in the preceding default trial. Source/system variability remains material.
+A subsequent source probe reproduces slow production while the application is active and visible. Over the steady interval it draws **20.14 frames/s**. Mean draw gap is **49.65 ms**, with **48.75 ms inside drawable acquisition**, **0.020 ms CPU encoding**, and **0.331 ms GPU execution**. A 30-second, five-millisecond stack sample places 4,382 of 4,437 main-thread samples in the semaphore wait under MTKView.currentDrawable → CAMetalLayer.nextDrawable. That identifies the immediate blocking operation; it does not identify which OS component or other client retains the surfaces.
 
-An opt-in minimum-presentation-duration experiment in build 21 averaged **57.68 presented fps** against **58.65 delivered/s**, versus **57.71** against **59.08** in the earlier unpaced trial. It did not establish better sustained output or frame-gap tails and is excluded from release 22. The default vsynced presentation policy is preserved.
+An 85-second native/no-presentation-counter/unsynced/native source control produced **21.57 / 19.63 / 42.51 / 20.21 draws/s**. Removing the source's optional presentation callback did not solve it. Disabling vsync only in that test source shortened acquisition wait from roughly 46–50 ms to 18 ms; restoring it reversed the effect. Physical Viewer vsync was never disabled. This is evidence of source presentation/resource pacing, not a production fix or an ordinary-desktop FPS result. Source positive presentation timestamps are unavailable on this virtual display, so draw/GPU counters are not labeled actual source presentations.
 
-## Final release tests, with frame tracing disabled
+A separate on/off/on/off ScreenCaptureKit control keeps the same virtual display and source alive. Source draws averaged **22.37 / 27.00 / 20.42 / 23.57 per second**, with mean drawable waits **44.36 / 36.45 / 48.02 / 41.30 ms**. Stopping our capture improves some headroom but does not restore 60, and the wait persists while it is stopped. This rules out our live encoder/transport as the sole cause; it does not prove ScreenCaptureKit has no contribution or that the private virtual-display implementation is faultless.
 
-| Workload | Duration | Capture/s | Delivered/s | Presented fps | Encode + pack | ACK cycle |
+Apple documents [nextDrawable](https://developer.apple.com/documentation/quartzcore/cametallayer/nextdrawable()) as waiting for an available drawable. The present investigation has not established the internal cause of the exhausted pool. Direct WindowServer sampling requires privileges; ordinary sampling was refused, and a noninteractive sudo attempt required a password. No credentials or system permissions were changed.
+
+## iMac presentation/submission and acknowledgement tails
+
+The production helper `commandBuffer.present(drawable)` registers a deferred operation. Timing its CPU call only measures registration. Apple describes this [scheduled-handler mechanism](https://developer.apple.com/library/archive/documentation/Miscellaneous/Conceptual/MetalProgrammingGuide/Render-Ctx/Render-Ctx.html). Build 25 explicitly times drawable.present() from a scheduled handler. That alternative call averaged roughly 0.05 ms, with a maximum below 0.6 ms in the matched full/sparse/full test. However, it changed observed scheduling and presentation rate, so it is not a transparent measurement of the original helper. It remains opt-in and is excluded from release tests. This corrects the earlier implication that a quick registration call excludes all deferred presentation work.
+
+The old 264.7 ms ACK / 244.7 ms pre-GPU-start outlier is still unexplained internally. New production-path traces can show different tails. In the source-profile run a 238 ms ACK cycle included only 12.75 ms of Viewer work and 225.26 ms of transport/unclassified endpoint residual. The same run included process sampling, so its tails must not be treated as unperturbed production measurements. The residual includes SSH/TLS and endpoint scheduling; it is not pure wire RTT. In a later unprofiled candidate trial, maximum iMac GPU-start delay was 9.01 ms, receiver work 16.52 ms, and ACK cycle 41.46 ms. No 245 ms presentation/submission outlier recurred there.
+
+A transparent compositor-pulse on/off test improved after the pulse was removed as well as while it ran. It did not show a causal reversal and is not enabled. A Screen Sharing minimize/restore trial did not restore source frame rate; the connection was kept alive. A repeated AnyDesk quit comparison is **inconclusive**: normal Quit left a user-owned capture child running, its termination occurred late, and reopening required clearing stale user helpers and reopening via Finder. The root service and its settings were left intact. Its normal user-process set and background capture restarted, but the GUI automation could not confirm the window. That interval is excluded as a clean capture-off comparison and is not used to attribute a speed gain to AnyDesk.
+
+## Final release tests
+
+The supplied build 30 is tested with no experimental probe flags and frame tracing disabled. The automatic one-second snapshots still run. First five and final two seconds are excluded from the aggregate summaries. The scroll test polls over SSH every two seconds; native window motion collects afterward.
+
+| Workload | Duration | Capture/s | Delivered/s | Positive presentation fps | Host encode + pack | ACK cycle |
 |---|---:|---:|---:|---:|---:|---:|
-| Native AppKit window motion | 45 s | 44.95 | 44.89 | 43.67 | 4.17 ms | 8.70 ms |
-| Fullscreen bitmap-text scroll | 180 s | 56.42 | 56.31 | 55.44 | 6.06 ms | 25.45 ms |
+| Bitmap-text scroll | 180 s | 16.12 | 16.11 | 16.11 | 7.65 ms | 19.59 ms |
+| Real AppKit window motion | 45 s | 19.28 | 19.21 | 19.18 | 4.01 ms | 7.88 ms |
 
-The three-minute run's one-second presentation samples ranged **39.9–60.1 fps**. Counter-window boundaries explain occasional values slightly above 60; they are not a faster panel. Payload averaged about **455 Mbps**. Worst automatic per-frame stage values recorded during active scrolling were **48.6 ms body assembly**, **16.78 ms submission-to-GPU-start**, **0.33 ms completion-callback delay**, **0.07 ms presentation call**, and **33.4 ms post-receive receiver total**. These maxima need not belong to the same frame. The earlier 245 ms presentation/submission outlier did not recur in this final run.
+**These sustained results are poor and do not meet the requested 60 fps.** Capture is the limiting rate: both runs have zero credit-limit skips, with iMac GPU-start maxima of 0.24 / 0.15 ms and receiver-total maxima of 12.63 / 5.96 ms. Maximum presentation gaps are 116.7 / 100.0 ms, following missing source/capture images rather than a comparably large receiver-work interval. Idle capture callbacks contain no image to recover. The system was much slower than the earlier 0.2.8 session; a same-session previous-release control is recorded below before attributing this difference to code.
 
-The highest complete traced default scrolling trial averaged **57.71 presented fps**, with **59.09 complete captures/s**, over 90 seconds. It must not replace the longer release result or the slower real-window result when evaluating the 60 fps target.
+Back-to-back 45-second current-session controls measured **0.2.8: 16.74 captures/s and 16.76 presentation fps; 0.2.9: 16.92 captures/s and 16.95 presentation fps**, both with zero backpressure skips. This does not show the final low rate to be a new-release regression. On this less-demanding sparse/delta workload, Viewer upload setup was **1.74 → 1.34 ms** and GPU execution **3.97 → 3.45 ms**; ACK cycle was **20.62 → 19.57 ms**. Overall FPS remained source-limited. The source/system state differs materially from the earlier 56-fps session; no large end-to-end gain is inferred.
 
-One-second counters use their own sampling windows, so delivered/rendered/presented rates can differ slightly at boundaries. These final results are averages of active one-second samples excluding the first five and final two seconds. Frame-trace results above instead count individual matched sequences within that interval. Requested refresh rates, source callback counts, complete capture samples, GPU completions and positive presentation callbacks are distinct measurements. Static desktops intentionally send few updates. No camera-based input-to-photon measurement was made.
+This variability is why the faster isolated upload costs are not advertised as stable desktop 60 fps. Large, less-compressible motion can also exceed this 1-Gbps link independently of these source waits.
 
-## Correctness and delivery
+## Correctness, delivery and next diagnostic boundary
 
-Final Host self-tests pass on the Studio; final Viewer self-tests pass over SSH on the actual iMac GPU. Coverage includes authentication/rejection, old/new greeting compatibility, bounded credits, serial and parallel frame parsing, exact tile bytes at 1440p/4K/5K, retained packet ownership, incompressible/mixed chunks, malformed lengths and compressed-input rejection, 5K private-texture upload/readback, queued deltas, bottom-edge pixels, independent BC7 decode, row-major/tile-major equality and bounded mailbox behavior. The dirty-flag/flat-block comparison checks 230,400 varied blocks against the original GPU encoder. New tests verify that brief timing spikes survive averaging and maxima reset each interval.
+Final Host self-tests pass on the Studio. Final Viewer self-tests pass over SSH on the actual AMD iMac. GPU texture readback compares every BC7 byte at 1440p, 4K and 5K for per-tile/coalesced paths and cached/write-combined memory. Cases include unordered full updates, adjacent runs, unchanged holes, row boundaries, partial bottom rows, queued deltas, staging reuse and sequence rejection. Existing authentication, encrypted loopback, malformed frame, chunked packing, retained ownership, reference BC7 decode and capture-mailbox checks continue to pass. No image-quality, authentication or transport-format change is made in this release.
 
-Both final app signatures are verified. Viewer is universal Intel/Apple silicon. Builds are ad-hoc signed and not notarized. The supplied and installed Viewer executable hashes are compared in delivery metadata. Existing releases are preserved. Privacy, firewall, sharing and network settings were not changed.
+Builds are ad-hoc signed and not notarized. Release artifacts preserve the tested executables, source, a Git history bundle, selected timing-only data and checksums. Previous releases remain intact. Exact current commit and installed/supplied executable hashes are in BUILD_INFO.json. Normal diagnostics are bounded to 120 samples, optional frame traces to 250,000 events. Experimental sources use bounded metadata only; no captured pixels, pairing codes or packet payloads are in the performance evidence.
 
-BC7 remains lossy. Fullscreen high-detail motion can exceed the bandwidth of these text scenes. Thunderbolt, colour-reference accuracy, thermal endurance and direct-monitor-equivalent latency have not been established. The private virtual-display API remains an operating-system compatibility risk.
-
-Use the parent **RetinaLink SSH Tunnel.command**. Host resides in this release folder; Viewer is installed at `~/Applications/RetinaLink-0.2.8/RetinaLink Viewer.app`. Both use existing pairing and automatic connection settings. Keep the iMac unlocked.
-
-Automatic diagnostics remain bounded to 120 records and now include per-interval maxima for ACKs, body assembly, presentation calls, submission-to-GPU-start and completion callbacks. Opt-in frame traces are metadata-only and capped at 250,000 events. `Tools/README.md` documents capture/encode-only probes, trace analysis and automated SSH testing. `Performance/` contains raw aggregate samples, manifests, selected compressed metadata traces and correctness logs. The analyzer can read either `.jsonl` or `.jsonl.gz`.
-
-The local Git history starts with tested 0.2.7 commit `2659ee5`. Delivery metadata identifies the release commit; the included Git bundle preserves history without publishing it to a remote service.
+Further exact attribution needs WindowServer/driver-side evidence or a properly controlled environment with other capture clients inactive. The app cannot create genuine new source images that WindowServer has not produced. Repeating the same source under lower system load, with a privileged read-only compositor trace if authorized, is a more informative next step than increasing frame credits or buffering stale frames. The private CGVirtualDisplay API remains an OS compatibility risk, and this work has not proved direct-monitor-equivalent latency.

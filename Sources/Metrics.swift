@@ -33,6 +33,11 @@ final class ViewerStatistics {
     private var drawableWidth = 0, drawableHeight = 0
     private var lastPresentation = 0.0, presentationGap = 0.0
     private var longGaps = 0
+    private var actualPresent=0.0,maxActualPresent=0.0,actualPresents=0
+    func actualPresentCall(_ ms: Double) {
+        lock.lock();defer {lock.unlock()}
+        actualPresent += ms;maxActualPresent=max(maxActualPresent,ms);actualPresents += 1
+    }
     func presented(width: Int, height: Int, time: Double) {
         guard time > 0 else { return }
         lock.lock(); defer { lock.unlock() }
@@ -68,7 +73,9 @@ final class ViewerStatistics {
         count = 0; queue = 0; unpack = 0; upload = 0; drawable = 0; gpu = 0; total = 0; assembly = 0; assembled = 0
         submission=0;callback=0;presentCall=0;maxAssembly=0;maxSubmission=0;maxCallback=0;maxPresentCall=0;maxTotal=0
         let presentation = String(format:"\nPresentation %.1f fps · drawable %d × %d · max gap %.1f ms · gaps >25 ms %d",presented.fps,drawableWidth,drawableHeight,presentationGap,longGaps)
+        let actual = actualPresents == 0 ? "" : String(format:"\nDeferred drawable present %.3f ms · max %.3f ms (%d calls)",actualPresent/Double(actualPresents),maxActualPresent,actualPresents)
+        actualPresent=0;maxActualPresent=0;actualPresents=0
         presentationGap = 0; longGaps = 0
-        return headline + "\n" + timing + transport + stalls + presentation
+        return headline + "\n" + timing + transport + stalls + presentation + actual
     }
 }

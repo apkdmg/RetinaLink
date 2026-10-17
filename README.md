@@ -1,23 +1,24 @@
-# RetinaLink 0.2.8
+# RetinaLink 0.2.9
 
 RetinaLink extends a Mac Studio desktop to the native 5120 × 2880 panel of a 2014 5K iMac over an IP network. Host requires Apple silicon and macOS 13+. Viewer includes Intel macOS 10.15+ and Apple silicon macOS 11+ binaries. The tested receiver is Big Sur 11.7.8 with an AMD Radeon R9 M290X.
 
-**0.2.8 reduces lossless packet packing from about 4.66 ms to 2.59 ms in the matched scrolling comparison, and total Host encode + pack from 7.93 ms to 6.09 ms. Stable 5K60 across desktop workloads remains unresolved.** See `VALIDATION.md` for sustained tests and the isolated capture/acknowledgement paths.
+**0.2.9 reduces the iMac's full-frame upload GPU time from roughly 6.5 ms to 3.6 ms and staging setup from roughly 6.0 ms to 4.75 ms in separate controlled tests. Stable 5K60 across desktop workloads remains unresolved.** See `VALIDATION.md` for source-side drawable waits, presentation-counter limitations and sustained release tests.
 
-## Changes in 0.2.8 build 22
+## Changes in 0.2.9 build 30
 
-- Large frames use four independent lossless LZ4 chunks, packed and unpacked in parallel. Viewer advertises this capability; older Viewers retain the original format. Small frames retain serial packing.
-- Every BC7 tile byte survives the new format exactly. Tests cover all supported resolutions, retained packets, raw/incompressible and mixed chunks, malformed lengths and decoder rejection.
-- Viewer completion/presentation callbacks retain frame identity instead of whole decoded 5K buffers after staging upload.
-- The GPU sets its dirty-tile boolean directly rather than performing an unnecessary read/modify/write. Static suppression and changed-tile contents are checked against the previous encoder. This change has no isolated FPS-gain claim.
-- Automatic one-second diagnostics now include worst acknowledgement/send delays, body-assembly maxima, GPU start delay, callback delay and presentation-call timing. Brief stalls are no longer hidden in averages.
-- Optional bounded frame traces match capture, packing, transfer, decoding, GPU work, presentation and ACK sequence numbers. Production tracing is disabled by default. `Tools/` provides SSH deployment, controlled scenes and trace analysis.
+- Adjacent changed BC7 tiles on the same tile row are uploaded as a single rectangle. A full 5K frame uses 23 blits instead of 920. Unchanged holes and row boundaries remain separate, and every compressed pixel byte is preserved.
+- CPU-write-only staging buffers use write-combined memory, and their destination pointer is acquired once per upload. GPU completion still owns staging-buffer reuse; transport remains bounded to three frames.
+- GPU readback regression tests cover the original and coalesced upload paths, both memory modes, all three resolutions, unordered tiles, sparse holes, bottom edges and queued updates.
+- Capture timestamp diagnostics retain signed callback/display offsets. Virtual-display timestamps were often ahead of delivery; clamping them to zero had hidden this detail.
+- Additional opt-in, bounded probes isolate buffer holding, source versus copied-surface encoding, capture on/off and standalone iMac presentation. They are disabled in normal use. No experiment that merely increases requested rates or reports GPU completions as presentations is enabled.
 
-The native capture clock, five-surface ScreenCaptureKit pool, bounded latest-frame mailbox and negotiated three-frame transport limit from 0.2.7 remain. BC7 tile bytes, native resolution, encrypted pairing and the default vsynced rendering policy are preserved. The presentation-pacing experiment did not establish an improvement and is excluded from this release.
+The lossless parallel packet format from 0.2.8 is retained, with legacy-peer fallback. See the preceding release for its packing comparison.
+
+The native capture clock, five-surface ScreenCaptureKit pool, bounded latest-frame mailbox and negotiated three-frame transport limit from 0.2.7 remain. BC7 tile bytes, native resolution, encrypted pairing and the default vsynced rendering policy are preserved. Physical-display vsync remains enabled; the source-vsync and deferred-presentation experiments are diagnostic options only.
 
 ## Use on these two Macs
 
-The installed iMac Viewer is `~/Applications/RetinaLink-0.2.8/RetinaLink Viewer.app`. The Studio Host is in the supplied `RetinaLink-0.2.8` folder. Use **RetinaLink SSH Tunnel.command** from the parent outputs folder to start the tunnel and apps. It reuses the existing SSH session when available. If SSH needs a password, enter it locally in Terminal.
+The installed iMac Viewer is `~/Applications/RetinaLink-0.2.9/RetinaLink Viewer.app`. The Studio Host is in the supplied `RetinaLink-0.2.9` folder. Use **RetinaLink SSH Tunnel.command** from the parent outputs folder to start the tunnel and apps. It reuses the existing SSH session when available. If SSH needs a password, enter it locally in Terminal.
 
 The current tunnel connects the iMac's `127.0.0.1:58473` to the Studio Host. Viewer uses **127.0.0.1** and **Automatic** networking, with the existing five-digit code. The app's “Local test” path label describes the tunnel entrance; traffic still crosses the Ethernet LAN. The tunnel is a workaround for the measured direct transport slowdown on this setup, not a claim that every network needs SSH.
 

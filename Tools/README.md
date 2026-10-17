@@ -4,7 +4,7 @@ These scripts automate the existing, user-authorized Studio/iMac test setup. The
 
 The workspace contains `work/imac-ssh-session/control`, an authenticated SSH control socket for `opsounimas@10.28.114.22`, and an existing reverse forward from the iMac's `127.0.0.1:58473` to the Studio's port 58473. Change these explicit test-machine defaults when adapting the tools. Do not commit SSH sockets, private keys, saved pairing codes or screen recordings.
 
-Build apps with `../build.sh` and scenes with:
+Build apps with `bash build.sh` and scenes with:
 
 ```
 python3 Tools/build_scenes.py --workspace /absolute/test-workspace
@@ -32,10 +32,27 @@ python3 Tools/analyze_stalls.py /absolute/test-workspace/work/perf/unique-test-n
 
 `--host-app` stops only a verified RetinaLink Host executable inside the workspace, then launches that app and waits for automatic reconnection. Omit it to retain the current connection. The default run makes no SSH calls during motion and fetches logs afterward. `--poll` reproduces two-second polling, using `poll_scene_test.py`. Use fresh names; completed results are not overwritten. Keep quiet trials at 90 seconds or less when one-second samples matter, because automatic snapshots retain 120 records. The metadata frame trace has a separate 250,000-event bound and can cover a longer trial; restart the traced apps before reaching that bound.
 
-Source choices are `layer` (Core Animation bitmap text), `native` (a real AppKit window) and `gpu` (a Metal-generated motion scene with actual source presentation counters). `--prefer-60` explicitly requests a 60 Hz Core Animation animation; `--measure-display-link` adds a source callback counter. Neither a requested rate nor callbacks prove displayed frames. The GPU scene is captured through ScreenCaptureKit; it does not bypass capture.
+Source choices are `layer` (Core Animation bitmap text), `native` (a real AppKit window) and `gpu` (a Metal-generated motion scene with draw/GPU-completion timing; positive presentation timestamps are unavailable on the virtual display in these trials). `--prefer-60` explicitly requests a 60 Hz Core Animation animation; `--measure-display-link` adds a source callback counter. Neither a requested rate nor callbacks prove displayed frames. The GPU scene is captured through ScreenCaptureKit; it does not bypass capture.
 
 Host arguments follow `--`. Version 0.2.8 defaults to negotiated parallel lossless packing for large frames. `--serial-packing` supplies a control; old Viewers always receive the original serial format. `--baseline-dirty-atomic` restores the old GPU flag operation. `--capture-only` releases capture buffers immediately without encoding or transmission. `--encode-only` captures, encodes and packs but discards frames instead of transmitting. These last two probes deliver zero displayed frames and must never be reported as display-FPS tests.
 
 `--trace-path` enables timing and frame-identity metadata only, written off the hot queues in one-second batches. It contains no images, pairing codes, packet payloads, addresses or window titles. It is disabled by default. Allow two seconds after motion for trace batches to settle.
 
-The analyzer matches sequence numbers and subtracts elapsed intervals measured on each machine; it does not depend on synchronized system clocks. `transport_residual_ms` includes transfer, TLS/SSH and unclassified endpoint overhead, including Host ACK queue time; it is not a pure network RTT. `gpu_queue_ms` measures pre-commit to reported GPU start; build 20 additionally measures presentation-call and commit-call durations. Actual positive Metal presentation callbacks are counted separately from rendered frames and ACKs. None of these measurements establishes camera-measured input-to-photon latency.
+The analyzer matches sequence numbers and subtracts elapsed intervals measured on each machine; it does not depend on synchronized system clocks. `transport_residual_ms` includes transfer, TLS/SSH and unclassified endpoint overhead, including Host ACK queue time; it is not a pure network RTT. `gpu_queue_ms` measures pre-commit to reported GPU start; build 20 additionally measures presentation-registration and commit-call durations. Actual positive Metal presentation callbacks are counted separately from rendered frames and ACKs. None of these measurements establishes camera-measured input-to-photon latency.
+
+
+## Version 0.2.9 isolation tools
+
+`--tile-blits --cached-upload` on Viewer restores the old per-tile, cached-memory upload path. Use each flag separately to isolate grouping or memory policy. The default is coalesced horizontal runs and write-combined, CPU-write-only staging. Packet contents and BC7 bytes are unchanged.
+
+Build the standalone universal Viewer probe with `bash Tools/build_viewer_probe.sh 31`. Install its generated app through `install_viewer.py`, with arguments such as `--plan full,sparse,full --period 15 --trace-path /Users/opsounimas/Library/Logs/RetinaLink/Probe.jsonl`. It generates bounded 5K test packets in RAM, omitting capture/network/LZ4 work, and exits after its plan. `collect_viewer_probe.py TEST --trace Probe.jsonl` waits for completion and normal app exit, then retrieves the same process's logs and trace. `analyze_viewer_probe.py work/perf/TEST` reports stages and marks zero-presentation or visibility/sleep samples. All rendering still uses production `DisplayView`; it is not an end-to-end display benchmark. Build 29 used `--write-combined` as an opt-in control; build 30 instead defaults to it and uses `--cached-upload` for the control.
+
+Host `--probe-plan capture,hold,source,snapshot,source,pack,capture --probe-period 30 --probe-hold 0.006` holds one continuous capture stream while changing only the measured processing phase. It transmits no frames. `source` GPU-encodes the captured surface; `snapshot` GPU-encodes an independent deep copy; both force full frames. `pack` packs cached output on the CPU. `analyze_capture_probe.py` compares these phases with source draw counters. Do not equate a source draw callback, GPU completion or changed application property with actual source presentation.
+
+Host `--capture-cycle-period 20` stops and restarts ScreenCaptureKit at that interval while retaining the same virtual display and source. The Viewer intentionally freezes during capture-off phases. It is an explicit diagnostic control, not a reconnect policy or production optimization. Cancel it by restarting Host without the flag.
+
+The GPU scene's `--frame-trace` records per-frame drawable acquisition, GPU execution, active/visible state and draw gaps, capped at 15,000 records. Source `--presentation-plan native,no-counter,unsynced,native --presentation-period 20` changes only that test app's presentation controls. Physical Viewer vsync remains enabled. Unsynced source results are diagnostic evidence, not normal-workload performance claims. `build_scenes.py` also builds the source-control test app from `Tools/Scenes/GPUScene.swift`; set `--source probe` in the harness for `work/RetinaLink Source Probe.app`. Frame times are metadata only.
+
+Viewer `--trace-actual-present` replaces Metal's convenience presentation registration with an explicit scheduled-handler call to `drawable.present()`. This measures that alternative handoff but changed observed scheduling, so it must not be treated as a transparent measurement of the original helper. It remains opt-in and is excluded from release tests.
+
+The transparent compositor pulse experiment did not show a reversed on/off effect and is not part of production. `run_pulse_test.py` and `Scenes/PulseScene.swift` retain the bounded reproduction, not a recommended setting.

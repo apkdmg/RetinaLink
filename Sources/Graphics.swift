@@ -98,11 +98,14 @@ final class TextureEncoder {
 // buffer is returned only after its GPU work completes, never while it is in use.
 final class TextureUploader {
     let device: MTLDevice
+    let coalesced: Bool
+    let writeCombined:Bool
+    private(set) var lastBlitCount=0
     private(set) var texture: MTLTexture?
     private var lastSequence: UInt64 = 0
     private let poolLock = NSLock()
     private var available: [MTLBuffer] = []
-    init(device: MTLDevice) { self.device = device }
+    init(device: MTLDevice, coalesced: Bool = !LaunchOptions.has("--tile-blits"),writeCombined:Bool = !LaunchOptions.has("--cached-upload")) { self.device = device;self.coalesced=coalesced;self.writeCombined=writeCombined }
     func encode(_ frame: Frame, into command: MTLCommandBuffer) throws -> MTLTexture {
         guard frame.sequence == lastSequence+1 else { throw LinkError.invalid("Frame sequence mismatch") }
         if texture == nil || texture?.width != frame.width || texture?.height != frame.height {
@@ -113,20 +116,46 @@ final class TextureUploader {
         }
         guard let texture = texture else { throw LinkError.invalid("5K texture allocation failed") }
         let length = frame.tiles.reduce(0) { $0 + $1.bytes.count }
+        lastBlitCount=0
         if length > 0 {
             poolLock.lock(); let reused = available.popLast(); poolLock.unlock()
-            guard let staging = (reused != nil && reused!.length >= length ? reused : device.makeBuffer(length:frame.width*frame.height,options:.storageModeShared)),
+            let options:MTLResourceOptions=writeCombined ? [.storageModeShared,.cpuCacheModeWriteCombined]:.storageModeShared
+            guard let staging = (reused != nil && reused!.length >= length ? reused : device.makeBuffer(length:frame.width*frame.height,options:options)),
                   let blit = command.makeBlitCommandEncoder() else { throw LinkError.invalid("Texture upload allocation failed") }
-            var offset = 0
-            for tile in frame.tiles {
-                let d = Frame.dimensions(tile.id,frame.width,frame.height)
-                tile.bytes.withUnsafeBytes { bytes in
-                    _ = memcpy(staging.contents().advanced(by:offset),bytes.baseAddress!,tile.bytes.count)
+            var tiles=frame.tiles
+            if coalesced && zip(tiles,tiles.dropFirst()).contains(where:{$0.id>$1.id}) {tiles.sort {$0.id<$1.id}}
+            var offset=0,index=0
+            let columns=(frame.width+127)/128
+            let destination=staging.contents()
+            while index<tiles.count {
+                let first=Frame.dimensions(tiles[index].id,frame.width,frame.height)
+                var end=index+1,runWidth=first.w
+                if coalesced {
+                    while end<tiles.count && tiles[end].id==tiles[end-1].id+1 && tiles[end].id/columns==tiles[index].id/columns {
+                        runWidth += Frame.dimensions(tiles[end].id,frame.width,frame.height).w;end += 1
+                    }
                 }
-                blit.copy(from:staging,sourceOffset:offset,sourceBytesPerRow:d.w*4,sourceBytesPerImage:tile.bytes.count,
-                          sourceSize:MTLSize(width:d.w,height:d.h,depth:1),to:texture,destinationSlice:0,destinationLevel:0,
-                          destinationOrigin:MTLOrigin(x:d.x,y:d.y,z:0))
-                offset += tile.bytes.count
+                let stride=runWidth*4,runBytes=runWidth*first.h
+                if end==index+1 {
+                    tiles[index].bytes.withUnsafeBytes {_ = memcpy(destination.advanced(by:offset),$0.baseAddress!,runBytes)}
+                } else {
+                    // Repack adjacent BC7 block rows into one rectangular upload.
+                    // Never bridge an unchanged tile or a tile-row boundary.
+                    var x=0
+                    for i in index..<end {
+                        let tile=tiles[i],rowBytes=Frame.dimensions(tile.id,frame.width,frame.height).w*4
+                        tile.bytes.withUnsafeBytes { bytes in
+                            for row in 0..<(first.h/4) {
+                                memcpy(destination.advanced(by:offset+row*stride+x),bytes.baseAddress!.advanced(by:row*rowBytes),rowBytes)
+                            }
+                        }
+                        x += rowBytes
+                    }
+                }
+                blit.copy(from:staging,sourceOffset:offset,sourceBytesPerRow:stride,sourceBytesPerImage:runBytes,
+                          sourceSize:MTLSize(width:runWidth,height:first.h,depth:1),to:texture,destinationSlice:0,destinationLevel:0,
+                          destinationOrigin:MTLOrigin(x:first.x,y:first.y,z:0))
+                lastBlitCount += 1;offset += runBytes;index=end
             }
             blit.endEncoding()
             command.addCompletedHandler { [weak self,staging] _ in
@@ -152,6 +181,7 @@ final class DisplayView: NSView {
     private var redrawPending = false
     var onFrame: ((RenderTiming) -> Void)?
     var onPresentation: ((Int, Int, Double) -> Void)?
+    var onActualPresent: ((Double) -> Void)?
     var onError: ((String) -> Void)?
     override var acceptsFirstResponder: Bool { true }
     override var isOpaque: Bool { true }
@@ -190,7 +220,7 @@ final class DisplayView: NSView {
             self.redrawLock.lock(); self.redrawPending = false; self.redrawLock.unlock()
             guard let texture = self.uploader.texture, let command = self.commandQueue.makeCommandBuffer(),
                   let drawable = self.surface.nextDrawable() else { return }
-            do { try self.draw(texture,into:command,drawable:drawable); command.present(drawable); command.commit() }
+            do { try self.draw(texture,into:command,drawable:drawable); self.present(drawable,on:command,sequence:0); command.commit() }
             catch { self.onError?(String(describing:error)) }
         }
     }
@@ -225,7 +255,7 @@ final class DisplayView: NSView {
                 }
                 let beforePresent=ProcessInfo.processInfo.systemUptime
                 FrameTrace.shared.event("present_begin",sequence:sequence,fields:["view":self.traceID])
-                command.present(drawable)
+                self.present(drawable,on:command,sequence:sequence)
                 let submitted=ProcessInfo.processInfo.systemUptime
                 command.addCompletedHandler { [weak self] command in
                     let completed=ProcessInfo.processInfo.systemUptime
@@ -239,10 +269,23 @@ final class DisplayView: NSView {
                         callbackMS:max(0,completed-command.gpuEndTime)*1000,presentMS:(submitted-beforePresent)*1000)
                     self.onFrame?(timing)
                 }
-                FrameTrace.shared.event("gpu_commit",sequence:sequence,fields:["view":self.traceID,"uploaded":uploaded,"acquired":acquired])
+                FrameTrace.shared.event("gpu_commit",sequence:sequence,fields:["view":self.traceID,"uploaded":uploaded,"acquired":acquired,"blits":self.uploader.lastBlitCount])
                 command.commit()
                 FrameTrace.shared.event("commit_return",sequence:sequence,fields:["view":self.traceID])
             } catch { self.onError?(String(describing:error)) } }
+        }
+    }
+    private func present(_ drawable: CAMetalDrawable, on command: MTLCommandBuffer, sequence: UInt64) {
+        guard LaunchOptions.has("--trace-actual-present") else {command.present(drawable);return}
+        // Match Metal's convenience method: present the drawable after scheduling,
+        // without waiting for completion. Time the deferred handoff itself.
+        command.addScheduledHandler { [weak self] _ in
+            let began=ProcessInfo.processInfo.systemUptime
+            FrameTrace.shared.event("drawable_present_begin",sequence:sequence,fields:["view":self?.traceID ?? "closed"])
+            drawable.present()
+            let ms=(ProcessInfo.processInfo.systemUptime-began)*1000
+            FrameTrace.shared.event("drawable_present_end",sequence:sequence,fields:["view":self?.traceID ?? "closed","duration_ms":ms])
+            self?.onActualPresent?(ms)
         }
     }
     private func draw(_ texture: MTLTexture, into command: MTLCommandBuffer, drawable: CAMetalDrawable) throws {

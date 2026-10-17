@@ -16,15 +16,17 @@ final class CaptureTiming {
     private let lock = NSLock()
     private var counts = [Int](repeating:0,count:7)
     private var lastDisplay: Double?, gaps = 0, gapMS = 0.0, maxGapMS = 0.0, late = 0
-    private var ages = 0, ageMS = 0.0, maxAgeMS = 0.0
+    private var ages = 0, ageMS = 0.0, maxAgeMS = -Double.infinity, minAgeMS = Double.infinity
     func record(status: Int, displayTime: UInt64?) {
         lock.lock(); defer { lock.unlock() }
         counts[min(6,max(0,status))] += 1
         guard status == SCFrameStatus.complete.rawValue, let ticks = displayTime, ticks > 0 else { return }
         let displayed = CMClockMakeHostTimeFromSystemUnits(ticks).seconds
         let now = CMClockGetTime(CMClockGetHostTimeClock()).seconds
-        let age = max(0,(now-displayed)*1000)
-        ageMS += age; maxAgeMS = max(maxAgeMS,age); ages += 1
+        // Display timestamps can be ahead of callback delivery on a virtual
+        // display. Keep the signed offset rather than hiding it as zero lag.
+        let age = (now-displayed)*1000
+        ageMS += age; maxAgeMS = max(maxAgeMS,age);minAgeMS=min(minAgeMS,age);ages += 1
         if let previous = lastDisplay, displayed > previous {
             let gap = (displayed-previous)*1000
             gaps += 1; gapMS += gap; maxGapMS = max(maxGapMS,gap)
@@ -34,9 +36,9 @@ final class CaptureTiming {
     }
     func summary() -> (complete:Int,text:String) {
         lock.lock(); defer { lock.unlock() }
-        let text = String(format:"Capture callbacks complete %d · idle %d · blank %d · suspended %d · other %d\nSource display gap %.2f ms · max %.2f ms · gaps >25 ms %d · callback lag %.2f ms · max %.2f ms",counts[0],counts[1],counts[2],counts[3],counts[4]+counts[5]+counts[6],gapMS/Double(max(1,gaps)),maxGapMS,late,ageMS/Double(max(1,ages)),maxAgeMS)
+        let text = String(format:"Capture callbacks complete %d · idle %d · blank %d · suspended %d · other %d\nSource display gap %.2f ms · max %.2f ms · gaps >25 ms %d · callback/display offset %.2f ms · range %.2f…%.2f ms",counts[0],counts[1],counts[2],counts[3],counts[4]+counts[5]+counts[6],gapMS/Double(max(1,gaps)),maxGapMS,late,ageMS/Double(max(1,ages)),ages==0 ? 0:minAgeMS,ages==0 ? 0:maxAgeMS)
         let result = (counts[0],text)
-        counts = [Int](repeating:0,count:7); gaps = 0; gapMS = 0; maxGapMS = 0; late = 0; ages = 0; ageMS = 0; maxAgeMS = 0
+        counts = [Int](repeating:0,count:7); gaps = 0; gapMS = 0; maxGapMS = 0; late = 0; ages = 0; ageMS = 0; maxAgeMS = -Double.infinity;minAgeMS=Double.infinity
         return result
     }
 }
@@ -51,8 +53,11 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
     var captureID:UInt64 = 0
     let inlineCapture = LaunchOptions.has("--inline-capture")
     let link: Link, encoder: TextureEncoder
+    let probe:CaptureProbe?
     let packer: FramePacker? = LaunchOptions.has("--baseline-packing") ? nil:FramePacker()
     var stream: SCStream?, virtual: RLVirtualDisplay?
+    var captureCycle:Task<Void,Never>?
+    let captureCyclePeriod:Double?
     var inFlight: [UInt64:Double] = [:], sequence: UInt64 = 0
     var frameLimit = 2
     var parallelPacking = false
@@ -68,7 +73,15 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
     var authorize: @MainActor () async throws -> Void = {
         _ = try await SCShareableContent.excludingDesktopWindows(false,onScreenWindowsOnly:false)
     }
-    init(link: Link) throws { self.link = link; encoder = try TextureEncoder(); super.init() }
+    init(link: Link) throws {
+        self.link=link;encoder=try TextureEncoder()
+        if let raw=LaunchOptions.value("--capture-cycle-period") {
+            guard let seconds=Double(raw),seconds.isFinite,(10...60).contains(seconds) else {throw LinkError.invalid("Capture cycle period must be 10…60 seconds")}
+            captureCyclePeriod=seconds
+        } else {captureCyclePeriod=nil}
+        if let plan=LaunchOptions.value("--probe-plan") {probe=try CaptureProbe(plan:plan,period:Double(LaunchOptions.value("--probe-period") ?? "30") ?? 30,hold:Double(LaunchOptions.value("--probe-hold") ?? "0.006") ?? 0.006)} else {probe=nil}
+        super.init()
+    }
     @MainActor func start(width: Int,height: Int,fps: Int) async throws {
         activity = StreamingActivity()
         // ScreenCaptureKit is the authority for this capture request. A legacy
@@ -108,6 +121,24 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
         work.sync { active = true }
         mailbox.start()
         try await stream.startCapture()
+        if let period=captureCyclePeriod {
+            DiagnosticLog.shared.record("capture-cycle","Capture on; virtual display retained; period \(period)")
+            captureCycle=Task { @MainActor [weak self,weak stream] in
+                var paused=false
+                while !Task.isCancelled {
+                    do {
+                        try await Task.sleep(nanoseconds:UInt64(period*1e9))
+                        guard let self=self,let stream=stream,self.stream === stream else{return}
+                        if paused {try await stream.startCapture()} else {try await stream.stopCapture()}
+                        paused.toggle()
+                        DiagnosticLog.shared.record("capture-cycle",paused ? "Capture off; virtual display retained":"Capture on; virtual display retained")
+                    } catch {
+                        if Task.isCancelled {return}
+                        self?.work.async {[weak self] in self?.fail("Capture cycle: \(error)")};return
+                    }
+                }
+            }
+        }
         work.async { [weak self] in
             guard let self = self, self.active else { return }
             let timer = DispatchSource.makeTimerSource(queue:self.work)
@@ -123,6 +154,7 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
         }
     }
     @MainActor func stop() async {
+        captureCycle?.cancel();captureCycle=nil
         mailbox.stop()
         work.sync { active = false; watchdog?.cancel(); watchdog = nil; inFlight.removeAll() }
         if let stream = stream { try? await stream.stopCapture() }
@@ -187,6 +219,10 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
         encode(pixel)
     }
     private func encode(_ pixel: CVPixelBuffer,captureID:UInt64=0) {
+        if let probe=probe {
+            do {try probe.process(pixel,encoder:encoder,packer:packer,parallel:parallelPacking)} catch {fail(String(describing:error))}
+            return
+        }
         guard inFlight.count < frameLimit else { skipped += 1;FrameTrace.shared.event("capture_backpressure",fields:["id":captureID]);return }
         do {
             let start = ProcessInfo.processInfo.systemUptime
@@ -213,8 +249,9 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
         guard elapsed > 0 else { return }
         let timings = encodes == 0 && delivered == 0 ? "Idle — no sent or acknowledged frames in this interval." : String(format:"Average encode + pack %.1f ms · acknowledgement %.1f ms",encodeMS/Double(max(1,encodes)),ackMS/Double(max(1,delivered)))
         let transport = String(format:"\nSend queue + transport processing %.1f ms · ACK dispatch %.1f ms · coalesced %d",sendMS/Double(max(1,sendCount)),ackDispatchMS/Double(max(1,delivered)),input.replaced) + "\n" + timing.text + String(format:"\nEncoder GPU %.2f ms · GPU submit/wait %.2f ms · tile gather %.2f ms · packet pack %.2f ms",gpuMS/Double(max(1,encodes)),gpuWaitMS/Double(max(1,encodes)),gatherMS/Double(max(1,encodes)),packMS/Double(max(1,encodes)))
+        let probeText=probe.map {"\n"+$0.report()} ?? ""
         let tails=String(format:"\nWorst ms: acknowledgement %.1f · send processing %.1f · ACK dispatch %.1f",maxACK,maxSend,maxACKDispatch)
-        onStatus?(String(format:"%.1f delivered updates/s · %.1f Mbps · %d/%d frames in flight\nCapture %.1f/s · unchanged %d · backpressure skips %d · inactive %d\n",Double(delivered)/elapsed,Double(sentBytes)*8/elapsed/1e6,inFlight.count,frameLimit,Double(complete)/elapsed,unchanged,skipped,inactive) + timings + transport + tails)
+        onStatus?(String(format:"%.1f delivered updates/s · %.1f Mbps · %d/%d frames in flight\nCapture %.1f/s · unchanged %d · backpressure skips %d · inactive %d\n",Double(delivered)/elapsed,Double(sentBytes)*8/elapsed/1e6,inFlight.count,frameLimit,Double(complete)/elapsed,unchanged,skipped,inactive) + timings + transport + tails + probeText)
         delivered = 0; sentBytes = 0; skipped = 0; lastStats = now
         complete = 0; unchanged = 0; inactive = 0; encodes = 0; encodeMS = 0; ackMS = 0
         sendMS = 0; sendCount = 0; ackDispatchMS = 0

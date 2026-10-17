@@ -10,7 +10,7 @@ if [ ! -d "$SDK" ]; then SDK="$(xcrun --show-sdk-path)"; fi
 COMMON=(Sources/Protocol.swift Sources/Metrics.swift Sources/Diagnostics.swift Sources/CaptureMailbox.swift Sources/Graphics.swift Sources/UI.swift Sources/main.swift Tests/SelfTests.swift)
 FLAGS=(-O -whole-module-optimization -swift-version 5 -sdk "$SDK" -module-cache-path "$RETINALINK_BUILD_DIR/cache" -framework AppKit -framework Network -framework Security -framework Metal -framework QuartzCore -framework CoreVideo -framework CoreMedia -lcompression)
 xcrun clang -fobjc-arc -arch arm64 -mmacosx-version-min=13.0 -isysroot "$SDK" -c Sources/VirtualDisplay.m -o "$RETINALINK_BUILD_DIR/VirtualDisplay.o"
-xcrun swiftc "${FLAGS[@]}" -target arm64-apple-macos13.0 -D HOST -import-objc-header Sources/VirtualDisplay.h "${COMMON[@]}" Sources/Host.swift "$RETINALINK_BUILD_DIR/VirtualDisplay.o" -framework ScreenCaptureKit -o "$RETINALINK_BUILD_DIR/Host"
+xcrun swiftc "${FLAGS[@]}" -target arm64-apple-macos13.0 -D HOST -import-objc-header Sources/VirtualDisplay.h "${COMMON[@]}" Sources/Host.swift Sources/CaptureProbe.swift "$RETINALINK_BUILD_DIR/VirtualDisplay.o" -framework ScreenCaptureKit -o "$RETINALINK_BUILD_DIR/Host"
 for ARCH in arm64 x86_64; do
     MIN=10.15; if [ "$ARCH" = arm64 ]; then MIN=11.0; fi
     xcrun swiftc "${FLAGS[@]}" -target "$ARCH-apple-macos$MIN" "${COMMON[@]}" -o "$RETINALINK_BUILD_DIR/Viewer-$ARCH"
@@ -31,8 +31,8 @@ for ROLE in Host Viewer; do
 <key>CFBundleName</key><string>RetinaLink $ROLE</string>
 <key>CFBundleDisplayName</key><string>RetinaLink $ROLE</string>
 <key>CFBundlePackageType</key><string>APPL</string>
-<key>CFBundleShortVersionString</key><string>0.2.8</string>
-<key>CFBundleVersion</key><string>22</string>
+<key>CFBundleShortVersionString</key><string>0.2.9</string>
+<key>CFBundleVersion</key><string>30</string>
 <key>LSMinimumSystemVersion</key><string>$MIN</string>
 <key>NSHighResolutionCapable</key><true/>
 <key>NSLocalNetworkUsageDescription</key><string>Discover and connect to your other Mac to stream a display over your local network.</string>

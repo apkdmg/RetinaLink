@@ -48,8 +48,15 @@ final class Scene: NSObject, NSApplicationDelegate, MTKViewDelegate {
     var activity: NSObjectProtocol?, timer: Timer?
     var start=0.0, previous=0.0, frame: UInt32=0
     let lock=NSLock(); var drawn=0, presented=0, totalPresented=0
+    var frameRecords:[[String:Any]]=[]
+    var lastDraw=0.0
+    let traceFrames=CommandLine.arguments.contains("--frame-trace")
+    let presentationPlan=option("--presentation-plan","native").split(separator:",").map(String.init)
+    let phasePeriod=max(10,Double(option("--presentation-period","20")) ?? 20)
+    var phaseName="native",phaseIndex = -1
     var records: [[String:Any]]=[]
     func applicationDidFinishLaunching(_ notification: Notification) {
+        guard !presentationPlan.isEmpty,presentationPlan.count<=10,presentationPlan.allSatisfy({["native","no-counter","unsynced"].contains($0)}) else {fputs("Invalid presentation plan\n",stderr);exit(1)}
         guard let screen=NSScreen.screens.first(where:{
             let id=($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as! NSNumber).uint32Value
             return CGDisplayVendorNumber(id)==0x5254
@@ -76,27 +83,45 @@ final class Scene: NSObject, NSApplicationDelegate, MTKViewDelegate {
     func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {}
     func draw(in view: MTKView) {
         autoreleasepool {
+            let entered=ProcessInfo.processInfo.systemUptime
+            let index=min(presentationPlan.count-1,Int(max(0,entered-start)/phasePeriod))
+            if index != phaseIndex {
+                phaseIndex=index;phaseName=presentationPlan[index]
+                (view.layer as? CAMetalLayer)?.displaySyncEnabled=phaseName != "unsynced"
+            }
+            let gap=lastDraw==0 ? 0:(entered-lastDraw)*1000;lastDraw=entered
             guard let drawable=view.currentDrawable,let pass=view.currentRenderPassDescriptor,
                   let command=queue.makeCommandBuffer(),let encoder=command.makeRenderCommandEncoder(descriptor:pass) else { return }
+            let acquired=ProcessInfo.processInfo.systemUptime
             frame += 1
             struct Params { var frame, mode: UInt32; var width,height: Float }
-            var p=Params(frame:frame,mode:mode=="window" ? 0 : (mode=="scroll" ? 1:2),width:Float(drawable.texture.width),height:Float(drawable.texture.height))
+            var p=Params(frame:frame,mode:mode=="window" ? 0 : (mode=="scroll" ? 1:(mode=="marker" ? 3:2)),width:Float(drawable.texture.width),height:Float(drawable.texture.height))
             encoder.setRenderPipelineState(pipeline); encoder.setFragmentBytes(&p,length:MemoryLayout<Params>.size,index:0)
             encoder.drawPrimitives(type:.triangle,vertexStart:0,vertexCount:3); encoder.endEncoding()
             lock.lock(); drawn += 1; lock.unlock()
-            drawable.addPresentedHandler { [weak self] drawable in
-                guard let self=self, drawable.presentedTime>0 else {return}
-                self.lock.lock(); self.presented += 1; self.totalPresented += 1; self.lock.unlock()
+            if phaseName != "no-counter" {
+                drawable.addPresentedHandler { [weak self] drawable in
+                    guard let self=self, drawable.presentedTime>0 else {return}
+                    self.lock.lock(); self.presented += 1; self.totalPresented += 1; self.lock.unlock()
+                }
+            }
+            let encoded=ProcessInfo.processInfo.systemUptime,identity=frame,active=NSApp.isActive,visible=window.occlusionState.contains(.visible)
+            if traceFrames {
+                command.addCompletedHandler {[weak self] command in
+                    guard let self=self else{return}
+                    let row:[String:Any]=["frame":identity,"draw":entered,"draw_gap_ms":gap,"drawable_ms":(acquired-entered)*1000,"encode_ms":(encoded-acquired)*1000,"gpu_start":command.gpuStartTime,"gpu_end":command.gpuEndTime,"completed":ProcessInfo.processInfo.systemUptime,"active":active,"visible":visible]
+                    self.lock.lock();if self.frameRecords.count<15000 {self.frameRecords.append(row)};self.lock.unlock()
+                }
             }
             command.present(drawable); command.commit()
         }
     }
     func report() {
         let now=ProcessInfo.processInfo.systemUptime, dt=now-previous
-        lock.lock(); let d=drawn, p=presented, total=totalPresented; drawn=0; presented=0; lock.unlock()
+        lock.lock(); let d=drawn, p=presented, total=totalPresented,frames=frameRecords; drawn=0; presented=0; lock.unlock()
         records.append(["uptime":now,"elapsed":now-start,"drawnFPS":Double(d)/dt,"presentedFPS":Double(p)/dt,
-                        "totalPresented":total,"width":view.drawableSize.width,"height":view.drawableSize.height])
-        let result:[String:Any]=["scene":mode,"samples":records]
+                        "totalPresented":total,"width":view.drawableSize.width,"height":view.drawableSize.height,"active":NSApp.isActive,"visible":window.occlusionState.contains(.visible),"phase":phaseName,"phaseIndex":phaseIndex])
+        let result:[String:Any]=["scene":mode,"samples":records,"frames":frames]
         if let data=try? JSONSerialization.data(withJSONObject:result,options:[.sortedKeys]) { try? data.write(to:URL(fileURLWithPath:logPath),options:.atomic) }
         previous=now
         if now-start>=duration { timer?.invalidate(); view.isPaused=true; window.close(); NSApp.terminate(nil) }

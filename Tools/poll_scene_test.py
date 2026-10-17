@@ -3,6 +3,7 @@ import argparse, json, os, pathlib, subprocess, time
 p = argparse.ArgumentParser()
 p.add_argument('--workspace',required=True,type=pathlib.Path)
 p.add_argument('name'); p.add_argument('--scene',default='window'); p.add_argument('--seconds',type=int,default=30); p.add_argument('--source',default='gpu')
+p.add_argument('--source-plan');p.add_argument('--source-period',type=int,default=20)
 p.add_argument('--prefer-60',action='store_true')
 p.add_argument('--measure-display-link',action='store_true')
 p.add_argument('--manual-animation',action='store_true')
@@ -14,8 +15,10 @@ host_samples, viewer_samples = {}, {}
 endpoints={}
 began = time.time()
 (out/'test.json').write_text(json.dumps({'began':began,'seconds':a.seconds,'scene':a.scene,'source':a.source},indent=2))
-executable=root/({'layer':'work/RetinaLink Layer Test.app/Contents/MacOS/LayerScene','native':'work/RetinaLink Native Test.app/Contents/MacOS/LayerScene','manual':'work/RetinaLink Manual Test.app/Contents/MacOS/LayerScene','synthetic':'work/RetinaLink Transport Bench.app/Contents/MacOS/Bench'}.get(a.source,'work/RetinaLink GPU Test.app/Contents/MacOS/GPUScene'))
+executable=root/({'probe':'work/RetinaLink Source Probe.app/Contents/MacOS/GPUScene','marker':'work/RetinaLink Marker Test.app/Contents/MacOS/GPUScene','layer':'work/RetinaLink Layer Test.app/Contents/MacOS/LayerScene','native':'work/RetinaLink Native Test.app/Contents/MacOS/LayerScene','manual':'work/RetinaLink Manual Test.app/Contents/MacOS/LayerScene','synthetic':'work/RetinaLink Transport Bench.app/Contents/MacOS/Bench'}.get(a.source,'work/RetinaLink GPU Test.app/Contents/MacOS/GPUScene'))
 args=[str(executable), '--scene',a.scene,'--seconds',str(a.seconds),'--log',str(out/'source.json')]
+if a.source=='probe':args+=['--frame-trace']
+if a.source_plan:args+=['--presentation-plan',a.source_plan,'--presentation-period',str(a.source_period)]
 if a.prefer_60: args+=['--prefer-60']
 if a.measure_display_link: args+=['--measure-display-link']
 if a.manual_animation: args+=['--manual-animation']

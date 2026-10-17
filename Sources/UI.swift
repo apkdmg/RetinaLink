@@ -107,7 +107,7 @@ final class ViewerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
             }
         }
         browser?.start(queue:.main); NSApp.activate(ignoringOtherApps:true)
-        DiagnosticLog.shared.record("launch", "Viewer ready; activity \(!LaunchOptions.has("--no-streaming-activity")); drawables \(LaunchOptions.has("--two-drawables") ? 2 : 3)")
+        DiagnosticLog.shared.record("launch", "Viewer ready; activity \(!LaunchOptions.has("--no-streaming-activity")); drawables \(LaunchOptions.has("--two-drawables") ? 2 : 3); coalesced uploads \(!LaunchOptions.has("--tile-blits")); write-combined \(!LaunchOptions.has("--cached-upload"))")
         if automatic { DispatchQueue.main.async { [weak self] in self?.toggleConnection() } }
     }
     @objc func pairingModeChanged() {
@@ -144,6 +144,7 @@ final class ViewerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
             let credits = DispatchSemaphore(value:3)
             let statistics = ViewerStatistics()
             display.onPresentation = { width, height, time in statistics.presented(width:width,height:height,time:time) }
+            display.onActualPresent = { statistics.actualPresentCall($0) }
             current.onReceiveTiming = { type, milliseconds in
                 if type == 2 { statistics.receivedBody(in:milliseconds) }
             }

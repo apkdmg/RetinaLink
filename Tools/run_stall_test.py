@@ -11,8 +11,9 @@ import time
 
 p=argparse.ArgumentParser()
 p.add_argument('name');p.add_argument('--workspace',type=Path)
-p.add_argument('--seconds',type=int,default=90);p.add_argument('--source',choices=['layer','native','gpu'],default='layer')
+p.add_argument('--seconds',type=int,default=90);p.add_argument('--source',choices=['layer','native','gpu','marker','probe'],default='layer')
 p.add_argument('--scene',default='scroll');p.add_argument('--host-app',type=Path)
+p.add_argument('--source-plan');p.add_argument('--source-period',type=int,default=20)
 p.add_argument('--prefer-60',action='store_true');p.add_argument('--measure-display-link',action='store_true')
 p.add_argument('--no-trace',action='store_true')
 p.add_argument('--poll',action='store_true')
@@ -53,10 +54,13 @@ if a.host_app:
 began=time.time()
 if a.poll:
     flags=(['--prefer-60'] if a.prefer_60 else [])+(['--measure-display-link'] if a.measure_display_link else [])
+    if a.source_plan:flags+=['--source-plan',a.source_plan,'--source-period',str(a.source_period)]
     subprocess.run(['/usr/bin/python3',str(Path(__file__).resolve().parent/'poll_scene_test.py'),'--workspace',str(root),a.name,'--source',a.source,'--scene',a.scene,'--seconds',str(a.seconds)]+flags,check=True)
 else:
-    executable={'layer':'RetinaLink Layer Test.app/Contents/MacOS/LayerScene','native':'RetinaLink Native Test.app/Contents/MacOS/LayerScene','gpu':'RetinaLink GPU Test.app/Contents/MacOS/GPUScene'}[a.source]
+    executable={'layer':'RetinaLink Layer Test.app/Contents/MacOS/LayerScene','native':'RetinaLink Native Test.app/Contents/MacOS/LayerScene','gpu':'RetinaLink GPU Test.app/Contents/MacOS/GPUScene','marker':'RetinaLink Marker Test.app/Contents/MacOS/GPUScene','probe':'RetinaLink Source Probe.app/Contents/MacOS/GPUScene'}[a.source]
     cmd=[str(root/'work'/executable),'--scene',a.scene,'--seconds',str(a.seconds),'--log',str(out/'source.json')]
+    if a.source=='probe':cmd.append('--frame-trace')
+    if a.source_plan:cmd+=['--presentation-plan',a.source_plan,'--presentation-period',str(a.source_period)]
     if a.prefer_60:cmd.append('--prefer-60')
     if a.measure_display_link:cmd.append('--measure-display-link')
     with open(out/'source.stdout','w') as log:

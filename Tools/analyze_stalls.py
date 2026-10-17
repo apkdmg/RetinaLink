@@ -53,6 +53,9 @@ for seq in sorted(sequences):
         row['gpu_queue_ms']=(cb.get('gpu_start',commit['t'])-commit['t'])*1000
         if 'present_begin' in vs:row['present_call_ms']=(commit['t']-vs['present_begin']['t'])*1000
         if 'commit_return' in vs:row['commit_call_ms']=(vs['commit_return']['t']-commit['t'])*1000
+    if 'drawable_present_begin' in vs and 'drawable_present_end' in vs:
+        row['actual_present_ms']=vs['drawable_present_end']['duration_ms']
+        if 'gpu_commit' in vs:row['schedule_to_present_ms']=(vs['drawable_present_begin']['t']-vs['gpu_commit']['t'])*1000
     if 'decoded' in vs:
         decode=vs['decoded'];row['decode_ms']=(decode['t']-decode['render_start'])*1000
         row['render_queue_ms']=(decode['render_start']-decode['arrival'])*1000

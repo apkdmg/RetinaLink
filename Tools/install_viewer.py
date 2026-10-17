@@ -7,6 +7,7 @@ import re
 import shlex
 import subprocess
 import sys
+import time
 
 p=argparse.ArgumentParser();p.add_argument('app',type=Path);p.add_argument('--label',required=True);p.add_argument('--workspace',type=Path);
 argv=sys.argv[1:];split=argv.index('--') if '--' in argv else len(argv)
@@ -23,11 +24,12 @@ subprocess.run(['/usr/bin/scp','-o','ControlPath='+str(root/'work/imac-ssh-sessi
 args=a.args[1:] if a.args and a.args[0]=='--' else a.args
 arguments=' '.join(shlex.quote(x) for x in args)
 script=f'''set -e
-command=$(/bin/ps -p {pid} -o command=)
-case "$command" in
-  "$HOME/Applications/RetinaLink"*"/RetinaLink Viewer.app/Contents/MacOS/RetinaLink"*) /bin/kill -TERM {pid} ;;
-  *) printf 'Unexpected Viewer process; installation stopped\\n' >&2; exit 1 ;;
-esac
+if command=$(/bin/ps -p {pid} -o command=); then
+  case "$command" in
+    "$HOME/Applications/RetinaLink"*"/RetinaLink Viewer.app/Contents/MacOS/RetinaLink"*) /bin/kill -TERM {pid} ;;
+    *) printf 'Unexpected Viewer process; installation stopped\\n' >&2; exit 1 ;;
+  esac
+fi
 /bin/sleep 1
 /bin/mkdir -p "$HOME/Applications/RetinaLink-{a.label}"
 /usr/bin/ditto -x -k "$HOME/Applications/{archive.name}" "$HOME/Applications/RetinaLink-{a.label}"
@@ -37,5 +39,10 @@ esac
 /usr/bin/open -n "$HOME/Applications/RetinaLink-{a.label}/RetinaLink Viewer.app" --args --autoconnect --fullscreen {arguments}
 '''
 subprocess.run(ssh+[script],check=True)
+for _ in range(40):
+    fresh=json.loads(subprocess.check_output(ssh+['cat "$HOME/Library/Logs/RetinaLink/Viewer.json"'],text=True))
+    if fresh['pid'] != pid:break
+    time.sleep(.5)
+else:raise RuntimeError('New Viewer did not publish diagnostics')
 (root/f'work/viewer-self-test-{a.label}.txt').write_bytes(subprocess.check_output(ssh+[f'cat "$HOME/Library/Logs/RetinaLink/self-test-{a.label}.txt"']))
 print('Installed',a.label,'with native self-tests passed',flush=True)

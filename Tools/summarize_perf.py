@@ -17,6 +17,6 @@ for name in sys.argv[1:]:
             vals=[float(m.group(1)) for s in rows if (m:=re.search(pattern,s['text']))]
             if vals: print(field, 'mean',round(statistics.mean(vals),2),'min',min(vals),'max',max(vals))
         if role=='host':
-            for field,pattern in {'encoder_gpu_ms':r'Encoder GPU ([\d.]+)', 'gpu_submit_wait_ms':r'GPU submit/wait ([\d.]+)', 'tile_gather_ms':r'tile gather ([\d.]+)', 'packet_pack_ms':r'packet pack ([\d.]+)', 'source_gap_ms':r'Source display gap ([\d.]+)', 'callback_lag_ms':r'callback (?:age|lag) ([\d.]+)'}.items():
+            for field,pattern in {'encoder_gpu_ms':r'Encoder GPU ([\d.]+)', 'gpu_submit_wait_ms':r'GPU submit/wait ([\d.]+)', 'tile_gather_ms':r'tile gather ([\d.]+)', 'packet_pack_ms':r'packet pack ([\d.]+)', 'source_gap_ms':r'Source display gap ([\d.]+)', 'callback_offset_ms':r'callback/display offset (-?[\d.]+)'}.items():
                 vals=[float(m.group(1)) for s in rows if (m:=re.search(pattern,s['text']))]
                 if vals: print(field,'mean',round(statistics.mean(vals),2),'min',min(vals),'max',max(vals))

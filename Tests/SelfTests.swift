@@ -90,6 +90,7 @@ func runSelfTests() throws {
     try testGPU()
     try testFlatBlockFastPath()
     try testCaptureMailbox()
+    try testCaptureProbe()
     #else
     if let device = MTLCreateSystemDefaultDevice() { print("GPU: \(device.name); BC textures: \(supportsBC(device))") }
     #endif
@@ -353,44 +354,48 @@ func testFragmentedTransport() throws {
 // preserve unchanged tiles, including the partial-height bottom row at 5K.
 func testTextureUpload() throws {
     guard let device = MTLCreateSystemDefaultDevice(), let queue = device.makeCommandQueue() else { throw LinkError.invalid("GPU unavailable for upload test") }
-    let w = 5120, h = 2880, total = 920
-    func tile(_ id: Int, _ value: UInt8) -> TileUpdate {
-        let d = Frame.dimensions(id,w,h)
-        var data = Data(repeating:value,count:d.w*d.h)
-        for i in stride(from:0,to:data.count,by:16) { data[i] = 64 }
-        return TileUpdate(id:id,bytes:data)
-    }
-    let first = Frame(sequence:1,width:w,height:h,keyframe:true,tiles:(0..<total).map { tile($0,UInt8($0%251)) })
-    let second = Frame(sequence:2,width:w,height:h,keyframe:false,tiles:[tile(total-1,253)])
-    let third = Frame(sequence:3,width:w,height:h,keyframe:false,tiles:[tile(0,254)])
-    let uploader = TextureUploader(device:device)
-    var readbacks: [(MTLCommandBuffer,MTLBuffer)] = []
-    for frame in [first,second,third] {
-        guard let command = queue.makeCommandBuffer(), let output = device.makeBuffer(length:w*h,options:.storageModeShared) else { throw LinkError.invalid("Upload test allocation failed") }
-        let parsed = try Frame.parse(frame.serialize())
-        let texture = try uploader.encode(parsed,into:command)
-        try check(texture.storageMode == .private,"Receiver texture is not GPU private")
-        guard let blit = command.makeBlitCommandEncoder() else { throw LinkError.invalid("Readback encoder failed") }
-        blit.copy(from:texture,sourceSlice:0,sourceLevel:0,sourceOrigin:MTLOrigin(x:0,y:0,z:0),sourceSize:MTLSize(width:w,height:h,depth:1),to:output,destinationOffset:0,destinationBytesPerRow:w*4,destinationBytesPerImage:w*h)
-        blit.endEncoding(); command.commit(); readbacks.append((command,output))
-    }
-    var expected = Data(repeating:0,count:w*h)
-    for (index, frame) in [first,second,third].enumerated() {
-        let (command,output) = readbacks[index]; command.waitUntilCompleted()
-        if let error = command.error { throw error }
-        for tile in frame.tiles {
-            let d = Frame.dimensions(tile.id,w,h)
-            for row in 0..<(d.h/4) {
-                let start = (d.y/4+row)*w*4+d.x*4, source = row*d.w*4
-                expected.replaceSubrange(start..<(start+d.w*4),with:tile.bytes[source..<(source+d.w*4)])
-            }
+    for (w,h) in [(2560,1440),(3840,2160),(5120,2880)] {for (coalesced,writeCombined) in [(false,false),(true,false),(true,true)] {
+        let columns=(w+127)/128,total=columns*((h+127)/128)
+        func tile(_ id:Int,_ value:UInt8)->TileUpdate {
+            let d=Frame.dimensions(id,w,h)
+            return TileUpdate(id:id,bytes:Data((0..<(d.w*d.h)).map {UInt8(truncatingIfNeeded:($0/13) ^ Int(value))}))
         }
-        try check(Data(bytes:output.contents(),count:w*h) == expected,"Asynchronous upload corrupted frame \(frame.sequence)")
-    }
-    guard let command = queue.makeCommandBuffer() else { throw LinkError.invalid("Command allocation failed") }
-    try expectInvalid { _ = try uploader.encode(third,into:command) }
-    let ms = (readbacks[0].0.gpuEndTime-readbacks[0].0.gpuStartTime)*1000
-    print(String(format:"PASS: 5K private-texture upload, queued deltas, unchanged tiles, bottom edge and sequence checks. First upload + readback GPU %.1f ms on %@.",ms,device.name))
+        let ids=[total-1,total-3,total-2,3,1,2,columns,columns-1,columns+2]
+        let frames=[
+            Frame(sequence:1,width:w,height:h,keyframe:true,tiles:(0..<total).map {tile($0,UInt8($0%251))}),
+            Frame(sequence:2,width:w,height:h,keyframe:false,tiles:ids.map {tile($0,253)}),
+            Frame(sequence:3,width:w,height:h,keyframe:false,tiles:[tile(0,254)])]
+        let uploader=TextureUploader(device:device,coalesced:coalesced,writeCombined:writeCombined)
+        var readbacks:[(MTLCommandBuffer,MTLBuffer)]=[]
+        func submit(_ frame:Frame) throws -> (MTLCommandBuffer,MTLBuffer) {
+            guard let command=queue.makeCommandBuffer(),let output=device.makeBuffer(length:w*h,options:.storageModeShared) else {throw LinkError.invalid("Upload test allocation failed")}
+            let texture=try uploader.encode(Frame.parse(frame.serialize()),into:command)
+            try check(texture.storageMode == .private,"Receiver texture is not GPU private")
+            guard let blit=command.makeBlitCommandEncoder() else {throw LinkError.invalid("Readback encoder failed")}
+            blit.copy(from:texture,sourceSlice:0,sourceLevel:0,sourceOrigin:MTLOrigin(x:0,y:0,z:0),sourceSize:MTLSize(width:w,height:h,depth:1),to:output,destinationOffset:0,destinationBytesPerRow:w*4,destinationBytesPerImage:w*h)
+            blit.endEncoding();command.commit();return (command,output)
+        }
+        for frame in frames {readbacks.append(try submit(frame))}
+        var expected=Data(repeating:0,count:w*h)
+        func validate(_ frame:Frame,_ readback:(MTLCommandBuffer,MTLBuffer)) throws {
+            let (command,output)=readback;command.waitUntilCompleted();if let error=command.error {throw error}
+            for tile in frame.tiles {
+                let d=Frame.dimensions(tile.id,w,h)
+                for row in 0..<(d.h/4) {
+                    let start=(d.y/4+row)*w*4+d.x*4,source=row*d.w*4
+                    expected.replaceSubrange(start..<(start+d.w*4),with:tile.bytes[source..<(source+d.w*4)])
+                }
+            }
+            try check(Data(bytes:output.contents(),count:w*h)==expected,"Upload changed BC7 bytes at \(w)×\(h), sequence \(frame.sequence), coalesced \(coalesced)")
+        }
+        for (frame,result) in zip(frames,readbacks) {try validate(frame,result)}
+        let fourth=Frame(sequence:4,width:w,height:h,keyframe:false,tiles:(0..<total).reversed().map {tile($0,241)})
+        let result=try submit(fourth);try validate(fourth,result)
+        try check(uploader.lastBlitCount == (coalesced ? (h+127)/128:total),"Unexpected full-frame upload grouping")
+        guard let command=queue.makeCommandBuffer() else {throw LinkError.invalid("Command allocation failed")}
+        try expectInvalid {_ = try uploader.encode(fourth,into:command)}
+    }}
+    print("PASS: baseline/coalesced private BC7 uploads in cached/write-combined memory match every byte at 1440p/4K/5K; queued deltas, unsorted runs, holes, row boundaries, bottom edges, staging reuse and sequence checks")
 }
 
 // A synthetic on-screen test of the production renderer. Does not capture any
@@ -617,5 +622,27 @@ func testGPU() throws {
     print(String(format:"PASS: 5K GPU compression, 920-tile keyframe, static-frame suppression, changed-tile detection and BC7 reference decode. First encode %.1f ms; warm average %.1f ms on %@.",encodeTime*1000,ms,encoder.device.name))
     print(String(format:"Synthetic gradient keyframe: %.2f MB after lossless packing; packing %.1f ms.",Double(packed.count)/1e6,serializeMS))
     print("Synthetic test only; excludes screen capture, a physical network, the Intel receiver and panel latency.")
+}
+#endif
+
+#if HOST
+func testCaptureProbe() throws {
+    let probe=try CaptureProbe(plan:"capture,hold,source,snapshot,pack",period:10)
+    try check(probe.index(at:0)==0 && probe.index(at:9.99)==0 && probe.index(at:10)==1 && probe.index(at:1000)==4,"Probe phase bounds")
+    try expectInvalid {_ = try CaptureProbe(plan:"capture,invalid")}
+    try expectInvalid {_ = try CaptureProbe(plan:"capture",period:0)}
+    var pixel:CVPixelBuffer?
+    try check(CVPixelBufferCreate(nil,8,8,kCVPixelFormatType_32BGRA,nil,&pixel)==kCVReturnSuccess,"Probe test surface")
+    let original=pixel!
+    CVPixelBufferLockBaseAddress(original,[])
+    let src=CVPixelBufferGetBaseAddress(original)!,stride=CVPixelBufferGetBytesPerRow(original)
+    for y in 0..<8 {for x in 0..<32 {src.storeBytes(of:UInt8(y*17+x),toByteOffset:y*stride+x,as:UInt8.self)}}
+    CVPixelBufferUnlockBaseAddress(original,[])
+    let snapshot=try CaptureProbe.copy(original)
+    CVPixelBufferLockBaseAddress(original,[]);memset(CVPixelBufferGetBaseAddress(original)!,0,stride*8);CVPixelBufferUnlockBaseAddress(original,[])
+    CVPixelBufferLockBaseAddress(snapshot,.readOnly);defer {CVPixelBufferUnlockBaseAddress(snapshot,.readOnly)}
+    let dst=CVPixelBufferGetBaseAddress(snapshot)!,row=CVPixelBufferGetBytesPerRow(snapshot)
+    for y in 0..<8 {for x in 0..<32 {try check(dst.load(fromByteOffset:y*row+x,as:UInt8.self)==UInt8(y*17+x),"Probe snapshot aliases source or changed pixels")}}
+    print("PASS: bounded diagnostic phase plan and deep independent BGRA snapshot with row-stride handling")
 }
 #endif
