@@ -256,7 +256,20 @@ def update_feed(args):
             raise ValueError(role+' does not enforce the expected update signing policy')
         folder = output/role.lower(); folder.mkdir(parents=True,exist_ok=True)
         upload = folder/f'RetinaLink-{role}-{info["CFBundleShortVersionString"]}-{info["CFBundleVersion"]}.zip'
-        if not upload.exists(): archive(app,upload)
+        records_file = folder/'.release-records.json'
+        records = json.loads(records_file.read_text()) if records_file.exists() else {'baseURL':base,'archives':{}}
+        if records['baseURL'] != base:
+            raise ValueError('Use a fresh staging directory when changing the update server URL.')
+        expected_executable = state['apps'][role]['executable_sha256']
+        if upload.exists():
+            record = records['archives'].get(upload.name)
+            if not record or record['sha256'] != digest(upload) or record['executableSHA256'] != expected_executable:
+                raise ValueError('Existing update archive changed or belongs to a different build. Bump the build number; do not overwrite a published update.')
+        else:
+            archive(app,upload)
+            records['archives'][upload.name] = {'sha256':digest(upload),'executableSHA256':expected_executable}
+            temporary = records_file.with_suffix('.next')
+            temporary.write_text(json.dumps(records,indent=2)+'\n'); temporary.replace(records_file)
         run([sparkle/'bin/generate_appcast','--account',CONFIG['keychainAccount'],
              '--download-url-prefix',base.rstrip('/')+'/'+role.lower()+'/',
              '--maximum-deltas','0','--maximum-versions','2',folder])

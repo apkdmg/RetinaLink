@@ -63,7 +63,10 @@ try:
  run(['/usr/bin/ssh','-S',str(a.socket.resolve()),'-O','forward','-R',f'127.0.0.1:{a.port}:127.0.0.1:{a.port}','-o','BatchMode=yes','-l',a.user,a.address]);forwarded=True
  # Use the real app, with a local command seam instead of UI/screen capture.
  old=load(hostlog)['pid'];cmd=run(['/bin/ps','-p',str(old),'-o','command='],capture_output=True,text=True).stdout.strip();assert cmd.startswith(str(app/'Contents/MacOS/RetinaLink'))
- run(['/bin/launchctl','bootout','gui/'+str(os.getuid())+'/local.retinalink.host.startup'])
+ subprocess.run(['/bin/launchctl','bootout','gui/'+str(os.getuid())+'/local.retinalink.host.startup'],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+ if subprocess.run(['/bin/ps','-p',str(old)],stdout=subprocess.DEVNULL).returncode==0:
+  try:os.kill(old,signal.SIGTERM)
+  except ProcessLookupError:pass
  wait('baseline Host exits',lambda:subprocess.run(['/bin/ps','-p',str(old)],stdout=subprocess.DEVNULL).returncode!=0,20)
  run(['/usr/bin/open','-n',app,'--args','--autostart','--test-control-directory',control,'--test-update-base-url',base,'--export-ui',out/'host-updates-ui.png'])
  wait('baseline test Host streams',lambda:load(hostlog)['pid']!=old and load(hostlog)['build']==a.from_build and viewer()['phase']=='streaming')
