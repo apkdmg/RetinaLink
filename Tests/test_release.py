@@ -13,6 +13,43 @@ import signing
 
 
 class ReleasePolicyTests(unittest.TestCase):
+    def test_credential_failure_report_excludes_input_and_command_output(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = pathlib.Path(folder)
+            (root/'work').mkdir()
+            marker = root/'work/notary-credentials-ready.json'
+            marker.write_text('{"authenticated":true}')
+            args = argparse.Namespace(profile='fixture', identity=None)
+            error = release.subprocess.CalledProcessError(1, ['secret-command'], output='secret-output', stderr='secret-error')
+            with patch.object(release, 'ROOT', root), patch.object(release.sys.stdin, 'isatty', return_value=True), patch.object(release, 'select_identity', return_value={'team':'ABCDE12345'}), patch('builtins.input', return_value='private@example.com'), patch.object(release, 'run', side_effect=error) as run:
+                with self.assertRaises(release.subprocess.CalledProcessError):
+                    release.credentials(args)
+                # Preserve Apple's direct Terminal I/O; never pipe its prompt.
+                self.assertEqual(run.call_args.kwargs, {})
+                self.assertNotIn('--password', run.call_args.args[0])
+            self.assertFalse(marker.exists())
+            report = root/'work/notary-credentials-status.json'
+            content = report.read_text()
+            status = json.loads(content)
+            self.assertEqual(status['stage'], 'apple_validation_and_keychain_save')
+            self.assertEqual(status['exit_code'], 1)
+            self.assertFalse(status['authenticated'])
+            for private in ['private@example.com', 'secret-command', 'secret-output', 'secret-error']:
+                self.assertNotIn(private, content)
+            self.assertEqual(report.stat().st_mode & 0o777, 0o600)
+
+    def test_credentials_only_report_success_after_saved_profile_authenticates(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = pathlib.Path(folder)
+            args = argparse.Namespace(profile='fixture', identity=None)
+            with patch.object(release, 'ROOT', root), patch.object(release.sys.stdin, 'isatty', return_value=True), patch.object(release, 'select_identity', return_value={'team':'ABCDE12345'}), patch('builtins.input', return_value='private@example.com'), patch.object(release, 'run'), patch.object(release, 'notary', side_effect=release.subprocess.CalledProcessError(1, 'history')):
+                with self.assertRaises(release.subprocess.CalledProcessError):
+                    release.credentials(args)
+            self.assertFalse((root/'work/notary-credentials-ready.json').exists())
+            status = json.loads((root/'work/notary-credentials-status.json').read_text())
+            self.assertEqual(status['stage'], 'saved_profile_verification')
+            self.assertEqual(status['result'], 'failed')
+
     def test_only_usable_developer_id_application_is_selected(self):
         listing = '\n'.join([
             '1) '+('A'*40)+' "Apple Development: Example (ABCDE12345)"',

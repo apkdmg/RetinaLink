@@ -48,22 +48,56 @@ def archive(app, destination):
 
 
 def credentials(args):
+    # Never record input, command arguments, or Apple's interactive output.
+    # Password entry stays attached directly to Apple's secure Terminal prompt.
+    marker = ROOT/'work/notary-credentials-ready.json'
+    report = ROOT/'work/notary-credentials-status.json'
+    report.parent.mkdir(parents=True, exist_ok=True)
+    marker.unlink(missing_ok=True)
+    status = {'profile': args.profile, 'authenticated': False, 'stage': 'terminal',
+              'time': time.time()}
+
+    def checkpoint(stage, **details):
+        status.update(stage=stage, time=time.time(), **details)
+        temporary = report.with_suffix('.next')
+        # Create privately even when the user's default umask is permissive.
+        with os.fdopen(os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), 'w') as file:
+            json.dump(status, file, indent=2)
+            file.write('\n')
+        temporary.replace(report)
+
+    checkpoint('terminal')
+    try:
+        _store_credentials(args, marker, checkpoint)
+    except (Exception, KeyboardInterrupt) as error:
+        details = {'result': 'failed', 'error_type': type(error).__name__}
+        if isinstance(error, subprocess.CalledProcessError):
+            details['exit_code'] = error.returncode
+        checkpoint(status['stage'], **details)
+        print('Setup diagnostic (no credentials): '+str(report), file=sys.stderr)
+        raise
+
+
+def _store_credentials(args, marker, checkpoint):
     if not sys.stdin.isatty():
         raise ValueError('Run python3 Tools/release.py credentials in your own Terminal. The password is entered only into Apple’s hidden prompt.')
+    checkpoint('signing_identity')
     identity = select_identity(args.identity)
+    checkpoint('apple_id_entry', team=identity['team'])
     apple_id = input('Developer Apple ID (email): ').strip()
     if not apple_id or any(c.isspace() for c in apple_id):
         raise ValueError('Enter a valid Developer Apple ID.')
     print('Enter an app-specific password at Apple’s secure prompt. RetinaLink does not read or save it.')
+    checkpoint('apple_validation_and_keychain_save')
     run(['/usr/bin/xcrun', 'notarytool', 'store-credentials', args.profile,
          '--apple-id', apple_id, '--team-id', identity['team'], '--validate'])
     # Verify the same profile immediately; a successful interactive command
     # must not be mistaken for a usable saved login in another context.
+    checkpoint('saved_profile_verification')
     notary(['history'], args.profile)
-    marker = ROOT/'work/notary-credentials-ready.json'
-    marker.parent.mkdir(parents=True, exist_ok=True)
     marker.write_text(json.dumps({'profile':args.profile, 'team':identity['team'],
                                  'authenticated':True, 'time':time.time()}, indent=2)+'\n')
+    checkpoint('complete', result='success', authenticated=True)
     print('Saved and verified notarization profile: '+args.profile)
 
 

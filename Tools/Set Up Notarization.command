@@ -10,6 +10,7 @@ if python3 Tools/release.py credentials; then
     printf 'You can return to Codex. No logs or passwords need to be copied.\n'
 else
     printf '\nSETUP FAILED — the login has not been verified.\n'
+ printf 'A diagnostic without credentials was saved for Codex to inspect.\n'
     printf 'Please share only the error text above, never a password.\n'
 fi
 printf '\nPress Return to close this window.\n'
