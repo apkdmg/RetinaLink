@@ -1,3 +1,19 @@
+# RetinaLink 0.3.1 build 44 — signing preparation, 17 October 2026
+
+**The Developer ID/notarization pipeline is implemented but a signed, notarized release has not yet been produced.** The local Keychain exposes no valid Developer ID Application identity. It contains Apple Development certificates, which are not the required distribution identity. Apple's `notarytool history --keychain-profile RetinaLink-Notary` also reports that the dedicated credential profile does not exist. The owner has been asked to create/import the Developer ID identity in Xcode; the separate notarization setup uses Apple's secure Terminal password prompt. No passwords/private signing keys are requested in chat or exported.
+
+The isolated 0.3.1 build 44 compiles for arm64 Host and universal Intel/Apple-silicon Viewer. Both app self-test suites pass, including on the actual Radeon R9 M290X iMac through SSH. New checks reject a different Host, team, development namespace or injected signing requirement. The existing isolated simulated capture-denial test passes. The iMac also correctly rejects the actual ad-hoc test app against the Apple Developer ID signature requirement. Nine offline release-policy tests pass for identity selection, accepted/rejected/pending submissions, changed upload rejection, Gatekeeper failures, resume without a duplicate upload, and Viewer ticket embedding before Host sealing/submission. These policy tests use explicit fixtures; they are not Apple notarization results.
+
+Signed builds now require Developer ID Application, Hardened Runtime, secure timestamps, stable bundle identifiers and a stable Keychain namespace. The release tool separately notarizes/staples Viewer, embeds the exact stapled archive, re-signs/notarizes/staples Host, re-extracts Viewer for validation and only then creates a distribution ZIP. It records source identity and submitted archive hashes, retains rejection logs, and does not regenerate a completed published archive. No hardened-runtime exception or privacy/security bypass was added.
+
+Host now has a separate **Update Display Software…** path. It verifies same-team signatures, checks that the existing Viewer is paired to this Host, validates the incoming replacement before stopping Viewer and preserves binding, Keychain items and startup configuration. It does not call enrollment or rotate pairing/tunnel keys. This real signed-to-signed replacement path remains unverified until the certificate and notarization profile are available. `RELEASING.md` specifies the two-successive-build validation required before claiming update continuity. A hosted automatic Host-download feed is not implemented.
+
+The working installed Host and fullscreen iMac Viewer remain **0.3.0 build 43**, connected through the existing tunnel. The isolated test app was removed from the iMac after its tests. The UI capture helper remained off. FileVault, automatic login, the existing Screen Recording grant, system trust and the production pairing were not changed. No new notarized download is claimed or distributed. The first transition from ad-hoc to Developer ID will require one Host-led setup and may require one final macOS permission approval; later same-team updates are designed to preserve identity. macOS's own first-run and periodic authorization policy still applies.
+
+Evidence: `work/build-signing-044.log`, `work/signing-host-self-tests.txt`, `work/signing-imac-self-tests.txt`, `work/signing-permission-test.txt`, `work/signing-imac-adhoc-rejected.txt`, `work/signing-release-tests.txt`, `work/signing-doctor.txt`, `work/signing-notary-profile-error.txt` and `work/signing-installed-state.json`.
+
+---
+
 # RetinaLink 0.3.0 build 43 — setup and appliance UX, 17 October 2026
 
 ## Implemented behavior

@@ -1,5 +1,7 @@
 # Reproducing the local two-Mac tests
 
+Developer ID signing, notarization and pairing-preserving Viewer replacements are described in [RELEASING.md](../RELEASING.md). `release.py doctor`, `credentials`, `prepare` and `advance` use a dedicated Keychain profile without storing secrets in the repository. `python3 -m unittest discover -s Tests -p test_release.py -v` runs offline release-policy tests; those do not count as actual notarization or signed-upgrade validation.
+
 These scripts automate the existing, user-authorized Studio/iMac test setup. They do not establish SSH credentials, change sharing/security settings, or create a new tunnel. The iMac must already be unlocked, and the saved encrypted RetinaLink pairing must work.
 
 The workspace contains `work/imac-ssh-session/control`, an authenticated SSH control socket for `opsounimas@10.28.114.22`, and an existing reverse forward from the iMac's `127.0.0.1:58473` to the Studio's port 58473. Change these explicit test-machine defaults when adapting the tools. Do not commit SSH sockets, private keys, saved pairing codes or screen recordings.

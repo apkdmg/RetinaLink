@@ -1,4 +1,6 @@
-# RetinaLink 0.3.0
+# RetinaLink
+
+The last installed and fully exercised release is 0.3.0 build 43. The 0.3.1 build-44 candidate adds Developer ID release tooling and pairing-preserving Viewer updates. Its isolated builds and self-tests pass, but actual signing and Apple notarization still require the developer's certificate and notarization credentials. See [RELEASING.md](RELEASING.md).
 
 Turn a Retina iMac into an unattended second display, with setup and daily controls on the main Mac. Host installs Viewer over an authenticated SSH connection, establishes saved device trust, and manages its display connection automatically. Viewer stays fullscreen, shows a quiet standby screen when disconnected, and reconnects without a mouse, keyboard, pairing code or Connect button on the iMac.
 
@@ -24,6 +26,8 @@ Viewer has a borderless native-resolution window. On connection loss, it replace
 
 Host owns the encrypted SSH tunnel and recreates it with a saved, restricted key when needed. There is no routine shell launcher, IP field or route selector on Viewer. The tunnel entrance is iMac loopback; the underlying image traffic still travels over the network. The legacy direct transport remains for compatibility/testing, but is not the new setup experience.
 
+For consecutive Developer ID releases, replace Host in its permanent Applications location, then choose **Connection Details → Update Display Software…**. Host verifies the same developer team and Viewer identity, installs its bundled replacement and restarts Viewer without enrollment or new pairing keys. The owner may need to authenticate management SSH for installation; the saved restricted streaming key cannot open a shell or install software. A public automatic-download feed for Host is not configured by this release tooling.
+
 ## FileVault and dedicated-display setup
 
 FileVault is inspected, never changed. On older Intel iMacs, a FileVault-locked startup disk must be unlocked before Viewer or ordinary SSH can run. Login agents start **after a graphical sign-in**, not before FileVault. Selecting dedicated display mode does not bypass that requirement.
@@ -40,7 +44,7 @@ Each enrollment generates a random 128-bit stream credential and a separate Ed25
 
 The iMac’s `authorized_keys` retains unrelated entries. RetinaLink’s marked key has a forced failing command, no PTY/agent/X11 access, and forwarding restricted to the loopback display endpoint. It cannot open a remote shell. Management operations such as installation and forgetting use the owner's separate authenticated SSH session. Replacing another Host’s binding requires an explicit replacement choice.
 
-**Development signing limitation:** this checkout currently has no Developer ID signing identity. Ad-hoc executables have hash-specific Keychain access rules, so development builds use a build-specific trust namespace and must be re-enrolled from Host when upgraded. This avoids automatic Keychain approval requests for changed unsigned code. A distribution build signed consistently with `RETINALINK_SIGN_IDENTITY` uses a stable namespace. Developer ID signing/notarization is still needed before presenting this as a finished consumer distribution; this build is not notarized.
+**Signing and migration:** Developer ID releases retain their bundle identifiers, signing team, designated requirements and Keychain namespace across versions. Ad-hoc development executables have hash-specific Keychain rules, so they use a separate build-specific namespace. Moving the existing development installation to Developer ID requires one final Host-led setup and may require Screen Recording approval again. Later compatible signed replacements are designed to retain trust. Signing does not bypass first-run permissions or reauthorization required by macOS policy. The candidate has not yet been Developer ID signed or notarized.
 
 Screen Recording approval can also remain attached to an older ad-hoc executable even when System Settings shows its switch enabled. If macOS reports a code-requirement mismatch, remove the old RetinaLink Host entry and add the permanently installed app again through System Settings. The app does not reset or edit macOS's privacy database. Keep the approved executable unchanged during testing.
 
@@ -54,7 +58,7 @@ GPU-completed updates, capture production, API presentation timestamps and actua
 
 ## Build and test
 
-Run `bash build.sh` with full Xcode installed. `RETINALINK_BUILD_DIR` chooses the output directory; `RETINALINK_SDK` selects a compatible SDK; `RETINALINK_SIGN_IDENTITY` selects a signing identity (default ad-hoc). Host is arm64 and contains the universal Intel/Apple-silicon Viewer archive. The native icon is included as `Resources/AppIcon.icns`; `Tools/MakeIcon.swift` preserves its vector drawing source.
+Run `bash build.sh` with full Xcode installed. Version/build defaults come from `Resources/Release.json`. `RETINALINK_BUILD_DIR` chooses the output directory; `RETINALINK_SDK` selects a compatible SDK; `RETINALINK_SIGN_IDENTITY` selects a **Developer ID Application** identity (default ad-hoc). Other certificate types are rejected for distribution. Signed builds enable Hardened Runtime and secure timestamps. `RETINALINK_BUILD_NUMBER` supports a distinct incremental build for upgrade testing. Host is arm64 and contains the universal Intel/Apple-silicon Viewer archive. The native icon is included as `Resources/AppIcon.icns`; `Tools/MakeIcon.swift` preserves its vector drawing source.
 
 Both executables support `--self-test`. Host supports `--permission-test` for simulated permission-denial recovery. `Tools/test_display_setup.py` drives the actual Host setup controller and app-owned test controls, then reads state over SSH. It exercises enrollment, fullscreen standby, Host pause/resume, app crash recovery, login-agent startup, pairing removal/re-enrollment and tunnel repair. It does not reboot or change login/encryption policy. See `Tools/README.md` and `VALIDATION.md` for the tested boundaries.
 

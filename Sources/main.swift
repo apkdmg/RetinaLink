@@ -3,6 +3,11 @@ import AppKit
 if ProcessInfo.processInfo.environment["RETINALINK_SSH_ASKPASS"] == "1" { runSSHAskpass() }
 
 #if !HOST
+if LaunchOptions.has("--device-status") {
+    // Non-secret update metadata only. No Keychain access or credential export.
+    do { FileHandle.standardOutput.write(try JSONEncoder().encode(DeviceSoftwareStatus.current())); print(""); exit(0) }
+    catch { fputs("\(error)\n",stderr); exit(1) }
+}
 if LaunchOptions.has("--apply-enrollment") {
     // Launch Services puts this short-lived enrollment helper in the signed-in
     // user's security session, where its login Keychain is available.

@@ -300,6 +300,8 @@ final class HostApp: NSObject, NSApplicationDelegate {
     var displayPaused = UserDefaults.standard.bool(forKey:"displayPaused")
     var setupController: HostSetupController?, tunnel: TunnelSupervisor?
     var homeTimer: Timer?, statusItem: NSStatusItem?
+    var updatingViewer = false
+    var updateButton: NSButton?
     let displayName = Design.text("A second life for your iMac.",23,.semibold)
     let displaySubtitle = Design.text("Your desktop, beautifully extended.",14,secondary:true)
     let restartNote = Design.text("",12,secondary:true)
@@ -336,6 +338,7 @@ final class HostApp: NSObject, NSApplicationDelegate {
         homeTimer = Timer.scheduledTimer(withTimeInterval:1,repeats:true) { [weak self] _ in self?.refreshHome() }
         if let path = LaunchOptions.value("--export-ui") { DispatchQueue.main.asyncAfter(deadline:.now()+1) { [weak self] in if let window = self?.window { Design.export(window,path:path) } } }
         if LaunchOptions.has("--setup-viewer") { runAutomatedSetup() }
+        if LaunchOptions.has("--update-viewer") { updateViewerSoftware() }
     }
     func makeHome() {
         let title = horizontal([Design.symbol("display.2",size:27),Design.text("RetinaLink",19,.semibold)])
@@ -349,7 +352,8 @@ final class HostApp: NSObject, NSApplicationDelegate {
         let heading = horizontal([Design.vertical([Design.text("Your displays",30,.bold),Design.text("Set up once. Connect effortlessly.",14,secondary:true)],spacing:7),spacer,add])
         let automatic = Design.card([Design.message("Always ready, after sign-in",detail:"Viewer opens fullscreen and reconnects to this Mac automatically. No pairing codes or controls are needed on the iMac.",symbol:"arrow.triangle.2.circlepath"),restartNote,
             horizontal([Design.button("Display Setup…",target:self,action:#selector(addDisplay)),Design.button("Dedicated Display Guide…",target:self,action:#selector(dedicatedGuide))])])
-        let details = Design.card([Design.text("Connection details",17,.semibold),Design.text("Native 5K at a target of 60 updates/s. Actual performance depends on capture and network conditions.",12,secondary:true),status,profiles,stats,
+        updateButton = Design.button("Update Display Software…",target:self,action:#selector(updateViewerSoftware))
+        let details = Design.card([Design.text("Connection details",17,.semibold),Design.text("Native 5K at a target of 60 updates/s. Actual performance depends on capture and network conditions.",12,secondary:true),status,profiles,stats,updateButton!,
             horizontal([Design.button("Copy Diagnostics",target:self,action:#selector(copyDiagnostics)),retryCaptureButton]),
             Design.button("Forget Display…",target:self,action:#selector(forgetDisplay)),
             Design.text("Legacy connection",13,.semibold),horizontal([pairingMode,copyCodeButton,newCodeButton]),pairing,pairingNote,addresses])
@@ -370,6 +374,7 @@ final class HostApp: NSObject, NSApplicationDelegate {
     }
     func refreshHome() {
         consumeTestCommand()
+        updateButton?.isEnabled = !updatingViewer && DeviceSettings.binding != nil && trustedCredential != nil && DistributionTrust.team != nil
         if let binding = DeviceSettings.binding {
             displayName.stringValue = binding.viewerName
             displaySubtitle.stringValue = displayPaused ? "Paused · still securely paired" : (capture == nil ? "Ready to connect · Native 5K" : "Extended desktop · Native 5K")
@@ -419,6 +424,21 @@ final class HostApp: NSObject, NSApplicationDelegate {
         }
     }
     @objc func openHome() { window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps:true) }
+    @objc func updateViewerSoftware() {
+        guard !updatingViewer, let binding = DeviceSettings.binding, trustedCredential != nil else { return }
+        updatingViewer = true; connectionNote.stringValue = "Updating display software. Pairing will be preserved…"
+        DispatchQueue.global(qos:.utility).async { [weak self] in
+            var report: [String:Any]
+            do {
+                let connection = try SetupConnection(SetupTarget(address:binding.address,username:binding.username,managementSocket:LaunchOptions.value("--ssh-control-path")))
+                let result = try connection.updateViewer(binding:binding)
+                report = ["success":true,"version":result.version,"build":result.build,"pairingPreserved":true]
+            } catch { report = ["success":false,"error":String(describing:error)] }
+            if let path = LaunchOptions.value("--update-report"), let data = try? JSONSerialization.data(withJSONObject:report,options:.sortedKeys) { try? data.write(to:URL(fileURLWithPath:path),options:.atomic) }
+            let message = report["success"] as? Bool == true ? "Display software updated. Your pairing is unchanged." : (report["error"] as? String ?? "Display update could not finish.")
+            DispatchQueue.main.async { self?.updatingViewer = false; self?.connectionNote.stringValue = message; self?.refreshHome() }
+        }
+    }
     @objc func toggleDetails() { advanced?.isHidden.toggle() }
     @objc func arrange() { NSWorkspace.shared.open(URL(string:"x-apple.systempreferences:com.apple.Displays-Settings.extension")!) }
     @objc func identify() { link?.send(5,Data("identify".utf8)) }

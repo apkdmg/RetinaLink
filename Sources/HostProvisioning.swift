@@ -89,6 +89,11 @@ final class SetupConnection {
         let result = try SystemTask.run("/usr/bin/scp",["-q","-o","ControlPath="+SystemTask.sshOptionPath(socket),"-o","BatchMode=yes","-o","ConnectTimeout=8",archive.path,destination],timeout:120)
         guard result.status == 0 else { throw LinkError.invalid("Viewer could not be copied to the iMac.\n"+String(result.errorText.prefix(400))) }
         let quoted = SystemTask.shellQuote(remote)
+        var distributionCheck = ""
+        if let team = DistributionTrust.team {
+            let requirement = try DistributionTrust.requirement(team:team,role:"Viewer")
+            distributionCheck = "/usr/bin/codesign --verify --deep --strict -R="+SystemTask.shellQuote(requirement)+" \"$incoming\"\n/usr/sbin/spctl --assess --type execute \"$incoming\""
+        }
         _ = try execute("""
         set -eu
         /bin/mkdir -p "$HOME/Applications" "$HOME/Library/Application Support/RetinaLink/Install"
@@ -100,6 +105,7 @@ final class SetupConnection {
         /usr/bin/codesign --verify --deep --strict "$incoming"
         identity=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$incoming/Contents/Info.plist")
         [ "$identity" = 'local.retinalink.Viewer' ]
+        \(distributionCheck)
         /bin/launchctl bootout "gui/$(/usr/bin/id -u)/local.retinalink.viewer.startup" 2>/dev/null || true
         for pid in $(/usr/bin/pgrep -x RetinaLink || true); do
             command=$(/bin/ps -p "$pid" -o command= || true)
@@ -117,6 +123,25 @@ final class SetupConnection {
         /bin/mv "$incoming" "$current"
         /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$current"
         """,timeout:60)
+    }
+    func updateViewer(binding: DeviceBinding) throws -> DeviceSoftwareStatus {
+        guard let team = DistributionTrust.team else { throw LinkError.invalid("Pairing-preserving updates require a Developer ID release. Use Display Setup once when moving from a development build.") }
+        let selfCheck = try SystemTask.run("/usr/bin/codesign",["--verify","--strict","--deep","-R="+(try DistributionTrust.requirement(team:team,role:"Host")),Bundle.main.bundlePath])
+        guard selfCheck.status == 0 else { throw LinkError.invalid("Host’s Developer ID signature could not be verified.") }
+        try ensure()
+        let requirement = try DistributionTrust.requirement(team:team,role:"Viewer")
+        _ = try execute("/usr/bin/codesign --verify --deep --strict -R="+SystemTask.shellQuote(requirement)+" \"$HOME/Applications/RetinaLink Viewer.app\"")
+        let result = try execute("\"$HOME/Applications/RetinaLink Viewer.app/Contents/MacOS/RetinaLink\" --device-status")
+        let before = try JSONDecoder().decode(DeviceSoftwareStatus.self,from:result.output)
+        try before.validateUpdate(hostID:binding.hostID,team:team)
+        // No enrollment, new key, trust deletion, or authorized_keys change.
+        try transferViewer()
+        try startViewer(startup:before.startupAtLogin)
+        let afterResult = try execute("\"$HOME/Applications/RetinaLink Viewer.app/Contents/MacOS/RetinaLink\" --device-status")
+        let after = try JSONDecoder().decode(DeviceSoftwareStatus.self,from:afterResult.output)
+        try after.validateUpdate(hostID:binding.hostID,team:team)
+        guard before.startupAtLogin == after.startupAtLogin else { throw LinkError.invalid("Viewer startup settings changed unexpectedly during update.") }
+        return after
     }
     func enroll(_ request: EnrollmentRequest, replacing: Bool) throws {
         try request.validate()

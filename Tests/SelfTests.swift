@@ -124,6 +124,20 @@ func runSetupTests() throws {
     try check(agent["LimitLoadToSessionType"] as? String == "Aqua" && agent["RunAtLoad"] as? Bool == true && agent["UserName"] == nil,"Viewer startup must run only in the signed-in user’s GUI session")
     let arguments = agent["ProgramArguments"] as? [String] ?? []
     try check(arguments.count == 2 && arguments[1] == "--appliance","Startup must not contain credentials or experimental rendering flags")
+    let team = "ABCDE12345"
+    let software = DeviceSoftwareStatus(hostID:binding.hostID,namespace:DistributionTrust.namespace,team:team,version:"0.3.1",build:"44",startupAtLogin:true)
+    try software.validateUpdate(hostID:binding.hostID,team:team)
+    try expectInvalid { try software.validateUpdate(hostID:UUID().uuidString,team:team) }
+    try expectInvalid { try software.validateUpdate(hostID:binding.hostID,team:"OTHER12345") }
+    var development = software; development.namespace = "local.retinalink.development.44"
+    try expectInvalid { try development.validateUpdate(hostID:binding.hostID,team:team) }
+    for invalid in ["", "abcde12345", "ABCDE12345\" or true", "../ABCDE12345"] {
+        try expectInvalid { _ = try DistributionTrust.requirement(team:invalid,role:"Viewer") }
+    }
+    try expectInvalid { _ = try DistributionTrust.requirement(team:team,role:"OtherApp") }
+    let signedRequirement = try DistributionTrust.requirement(team:team,role:"Viewer")
+    try check(signedRequirement.contains("anchor apple generic") && signedRequirement.contains("100.6.1.13") && !signedRequirement.contains("cdhash"),"Updates must require Apple Developer ID for the same team, without pinning one build hash")
+    print("PASS: signed updates reject a different Host, developer, development namespace and injected signing requirement")
     #if !HOST
     try expectInvalid { _ = try ViewerEnrollment.enroll(Data("{}".utf8)) }
     try expectInvalid { _ = try ViewerEnrollment.enroll(Data(repeating:0,count:16_385)) }
