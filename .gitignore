@@ -1,0 +1,7 @@
+.DS_Store
+.build/
+build/
+*.app/
+*.dSYM/
+*.zip
+*.trace.jsonl
