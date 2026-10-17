@@ -1,0 +1,31 @@
+# Direct connection and local Host approval
+
+RetinaLink 0.6.0 replaces the standard SSH setup/tunnel flow with a one-time signed Viewer installation and explicit two-screen approval. Host and Viewer are ordinary user apps. Standard setup never enables Remote Login, asks for an OS account password, edits `authorized_keys`, changes FileVault or alters automatic login/locking. The optional privileged dedicated-account management flow remains a separate, explicit SSH administrator operation.
+
+## First installation
+
+Install Host on the main Mac and Viewer on the iMac using their respective DMGs. Host also offers **Save Viewer Installer…** to export its bundled notarized Viewer ZIP for copying once. Open the installed Viewer, then use **Add Display** on Host. Discovery finds unpaired Viewers; a manual iMac address works when multicast discovery is unavailable but direct traffic is allowed. Both apps show the same eight-digit number. The owner must compare it and approve on each Mac. Viewer startup is installed only in the signed-in user's session and starts after graphical login. FileVault's restart limitation is shown before approval. No claim is made that login agents can run before FileVault unlock.
+
+Once paired, Viewer connects to Host directly over authenticated TLS using a random 128-bit credential stored in both login Keychains. It discovers the Host by its saved public Host ID and caches an address only after authentication. Discovery and cached addresses are hints, not trust. Host ID, stream credentials and binding survive compatible signed upgrades. A wrong discovery advertisement cannot supply the saved TLS key. Networks that isolate clients can still prevent direct communication; no router or SSH setting is silently changed to bypass that policy.
+
+## First-pairing authentication
+
+`NativePairing.swift` uses CryptoKit X25519, SHA-256/HKDF and AES-GCM. Host and Viewer first commit to their ephemeral public keys, random 256-bit nonces and bounded identity metadata, then reveal them. Both sides verify the commitments. The canonical role-ordered transcript binds identities, nonces and public keys. Domain-separated derivations provide the displayed authentication string and independent Host→Viewer / Viewer→Host encryption keys. Comparing the string on both screens authenticates the exchange; simply clicking approval without comparing does not provide that guarantee.
+
+All approval and enrollment messages are encrypted and transcript-authenticated. Strictly increasing counters reject replay and direction keys reject reflected messages. The owner approves through local UI methods; there is no network command to simulate a local approval. Enrollment is withheld until **both** local approvals have arrived. Viewer refuses to replace an existing pairing through this service. After committing, its setup listener closes. A lost final acknowledgment retains Host's saved half so an already committed Viewer can still reconnect.
+
+The service accepts one setup session at a time, caps attempts at six per five minutes, expires each session after two minutes and closes unpaired discoverability after ten minutes. It validates lengths before receiving bodies (16 KiB/message), bounds message counts and validates UUIDs, roles, names, usernames, commitments and keys. It accepts no shell commands, OS passwords, arbitrary file paths or software uploads. Diagnostics exclude keys, stream credentials and setup payloads. This protocol has implementation tests, not an independent cryptographic audit.
+
+## Existing-pair migration
+
+No re-enrollment is necessary. Viewer 0.6.0 reads its current binding/credential and discovers Host's new `hostID` TXT record. After authenticated direct TLS, Host persists a separate native-connection preference and closes the old app-owned SSH display master. It does not rotate credentials, rewrite the binding, delete restricted SSH keys, change FileVault or disable Remote Login. A one-time cleanup control operation can close an existing SSH socket; it does not initiate a new SSH login. Later native launches do not need an SSH server. The explicit legacy transport option remains for development/compatibility testing, not normal new setup.
+
+Host sends Viewer update controls and explicit Forget Display requests through the authenticated app connection. Public update hosting is still unconfigured. Signed supplied apps can be copied into the existing permanent locations without new pairing. Existing dedicated-account auto-login remains untouched; actual physical restart/wake checks deferred previously remain deferred.
+
+## Tests and boundaries
+
+`--native-pairing-test` and the native self-tests exercise committed identity checks, equal authentication strings, AES-GCM tampering, replay/reflection rejection, real TCP setup, one-sided approval refusal and a single commit after both approvals. They never write production trust.
+
+`Tools/test_native_pairing.py` deploys the signed Viewer through an owner-authenticated SSH control socket and runs the actual approval controllers on both Macs in explicitly isolated UUID test domains. A separate test Keychain service is mandatory, and startup-agent installation is suppressed. It invokes the same local button actions through a launch-only local test seam, tests cancellation and one-sided approval before a successful fresh enrollment, compares only disposable credential fingerprints, and verifies production Viewer binding/FileVault/public SSH keys are unchanged. Its interface exports render only the app's own view hierarchy; no UI capture helper is used.
+
+Existing-pair direct streaming must be validated separately with both real installed apps, their unchanged bindings and normal startup agents, while the old app-owned display SSH master is absent. SSH may remain enabled solely for independent test deployment/log collection. That is evidence of no app-owned SSH tunnel, not a test that disables the system's Remote Login service or reboots the iMac. Native 5K dimensions and software presentation counters are not proof of stable physical 60 fps.

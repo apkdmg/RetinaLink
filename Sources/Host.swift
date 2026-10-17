@@ -299,6 +299,8 @@ final class HostApp: NSObject, NSApplicationDelegate {
     var reconnectEnabled = false, quitting = false
     var displayPaused = UserDefaults.standard.bool(forKey:"displayPaused")
     var setupController: HostSetupController?, tunnel: TunnelSupervisor?
+    var nativeSetupController:NativeHostSetup?
+    var forgettingNative = false
     var homeTimer: Timer?, statusItem: NSStatusItem?
     var updatingViewer = false
     var updateButton: NSButton?
@@ -407,12 +409,12 @@ final class HostApp: NSObject, NSApplicationDelegate {
             copyCodeButton?.isHidden = true; newCodeButton?.isHidden = true; pairingMode.isHidden = true
         } else {
             restartNote.stringValue = "Setup checks FileVault first and explains any restart limits. No disk changes or additional macOS installation."
-            displaySubtitle.stringValue = "Choose Add Display to install and pair your iMac from here."
+            displaySubtitle.stringValue = "Install Viewer on your iMac once, then choose Add Display. No Remote Login needed."
             button?.title = "Set Up Display"; button?.action = #selector(addDisplay)
             if listener == nil && link == nil { homeStatus.stringValue = "Ready for setup from this Mac" }
         }
         if let path = LaunchOptions.value("--ui-state-path") {
-            let state: [String:Any] = ["version":LaunchOptions.version,"build":LaunchOptions.build,"pid":ProcessInfo.processInfo.processIdentifier,"trusted":reconnectEnabled,"paused":displayPaused,"listening":listener != nil,"streaming":capture != nil && helloReceived,"setupStage":setupController?.stage ?? "closed","fileVault":DeviceSettings.binding?.fileVault.rawValue ?? "unknown","time":Date().timeIntervalSince1970]
+            let state: [String:Any] = ["version":LaunchOptions.version,"build":LaunchOptions.build,"pid":ProcessInfo.processInfo.processIdentifier,"trusted":reconnectEnabled,"paused":displayPaused,"listening":listener != nil,"streaming":capture != nil && helloReceived,"setupStage":nativeSetupController?.stage ?? setupController?.stage ?? "closed","fileVault":DeviceSettings.binding?.fileVault.rawValue ?? "unknown","transport":NativeConnectionSettings.enabled ? "direct-tls" : "legacy-ssh","requiresRemoteLogin":!NativeConnectionSettings.enabled,"time":Date().timeIntervalSince1970]
             if let data = try? JSONSerialization.data(withJSONObject:state,options:.sortedKeys) { try? data.write(to:URL(fileURLWithPath:path),options:.atomic) }
         }
     }
@@ -467,7 +469,7 @@ final class HostApp: NSObject, NSApplicationDelegate {
         softwareUpdater.check(installNow:installNow)
     }
     @objc func updateViewerSoftware() {
-        if DeviceSettings.binding?.managementUsername != nil { checkUpdatesBoth(installNow:true); return }
+        if NativeConnectionSettings.enabled || DeviceSettings.binding?.managementUsername != nil { checkUpdatesBoth(installNow:true); return }
         guard !updatingViewer, let binding = DeviceSettings.binding, trustedCredential != nil else { return }
         updatingViewer = true; connectionNote.stringValue = "Updating display software. Pairing will be preserved…"
         DispatchQueue.global(qos:.utility).async { [weak self] in
@@ -498,6 +500,16 @@ final class HostApp: NSObject, NSApplicationDelegate {
             connectionNote.stringValue = "Turn off Dedicated Mode first to restore ordinary login, then forget this display."
             dedicatedGuide(); return
         }
+        if NativeConnectionSettings.enabled {
+            guard let peer = link, helloReceived else { connectionNote.stringValue = "Reconnect your iMac before forgetting it. Your pairing is kept."; return }
+            forgettingNative = true; peer.send(8,Data(binding.hostID.utf8))
+            connectionNote.stringValue = "Removing pairing through your encrypted app connection…"
+            DispatchQueue.main.asyncAfter(deadline:.now()+10) { [weak self] in
+                guard let self = self, self.forgettingNative else { return }
+                self.forgettingNative = false; self.connectionNote.stringValue = "Could not confirm removal. Your Host pairing is kept. Reconnect Viewer and try again."
+            }
+            return
+        }
         connectionNote.stringValue = "Removing pairing securely…"
         DispatchQueue.global(qos:.utility).async { [weak self] in
             do {
@@ -517,10 +529,17 @@ final class HostApp: NSObject, NSApplicationDelegate {
         }
     }
     @objc func dedicatedGuide() {
-        addDisplay()
+        legacyDisplaySetup()
         if let controller = setupController { controller.dedicated.state = .on; controller.advance() }
     }
     @objc func addDisplay() {
+        if nativeSetupController == nil {
+            let controller = NativeHostSetup(); nativeSetupController = controller
+            controller.onPrepared = { [weak self] in self?.enrollmentCompleted($0) }
+        }
+        nativeSetupController?.show()
+    }
+    func legacyDisplaySetup() {
         if setupController == nil { setupController = HostSetupController(host:self) }
         setupController?.show()
     }
@@ -532,13 +551,19 @@ final class HostApp: NSObject, NSApplicationDelegate {
         DiagnosticLog.shared.record("setup","Enrollment complete; encrypted trusted pairing; Viewer startup enabled; FileVault unchanged")
     }
     func startTunnel() {
+        if NativeConnectionSettings.enabled || LaunchOptions.has("--native-only") {
+            tunnel?.stop(disconnect:true); tunnel = nil
+            DispatchQueue.global(qos:.utility).async { TunnelSupervisor.disconnectExisting() }
+            connectionNote.stringValue = "Paired directly · Remote Login is not needed"
+            return
+        }
         tunnel?.stop(); let tunnel = TunnelSupervisor(); self.tunnel = tunnel
         tunnel.onState = { [weak self] message in DispatchQueue.main.async {
             self?.connectionNote.stringValue = message.hasPrefix("Secure") ? "Paired with this Mac · reconnects automatically" : "Check the iMac’s power, network or sign-in screen."
         } }; tunnel.start()
     }
     func runAutomatedSetup() {
-        addDisplay()
+        legacyDisplaySetup()
         guard let controller = setupController else { return }
         controller.address.stringValue = LaunchOptions.value("--viewer-address") ?? ""
         controller.username.stringValue = LaunchOptions.value("--viewer-user") ?? ""
@@ -602,7 +627,7 @@ final class HostApp: NSObject, NSApplicationDelegate {
         }
         do {
             let listener = try NWListener(using:networkParameters(code),on:NWEndpoint.Port(rawValue:defaultPort)!)
-            self.listener = listener; listener.service = NWListener.Service(name:Host.current().localizedName ?? "RetinaLink Host",type:serviceType)
+            self.listener = listener; listener.service = NWListener.Service(name:Host.current().localizedName ?? "RetinaLink Host",type:serviceType,domain:nil,txtRecord:NativeConnectionSettings.record(hostID:DeviceSettings.hostID))
             listener.stateUpdateHandler = { [weak self] state in
                 guard let self = self else { return }
                 switch state {
@@ -644,6 +669,13 @@ final class HostApp: NSObject, NSApplicationDelegate {
                         self.parallelPacking = hello.chunkedPacking == true && !LaunchOptions.has("--serial-packing")
                         self.helloReceived = true
                         self.viewerSupportsUpdates = hello.automaticUpdates == true
+                        if hello.directConnection == true, self.trustedCredential != nil {
+                            let migrating = !NativeConnectionSettings.enabled
+                            NativeConnectionSettings.enable(); self.tunnel?.stop(disconnect:true); self.tunnel = nil
+                            if migrating { DispatchQueue.global(qos:.utility).async { TunnelSupervisor.disconnectExisting() } }
+                            self.connectionNote.stringValue = "Encrypted app connection · Remote Login is not needed"
+                            DiagnosticLog.shared.record("transport","Direct authenticated TLS; SSH display tunnel stopped; pairing unchanged")
+                        }
                         self.viewerUpdateNote.stringValue = "iMac: RetinaLink \(hello.appVersion ?? "earlier release") · build \(hello.appBuild ?? "unknown")"
                         self.sendUpdateCommand(SoftwareUpdateCommand(action:"automatic",automatic:UpdateSettings.automatic))
                         if self.displayPaused { peer.send(5,Data("paused".utf8)); self.status.stringValue = "Display paused · securely paired" }
@@ -653,6 +685,15 @@ final class HostApp: NSObject, NSApplicationDelegate {
                     if let status = try? JSONDecoder().decode(SoftwareUpdateStatus.self,from:data) {
                         self.viewerUpdateNote.stringValue = "iMac: "+String(status.message.prefix(240))
                     }
+                } else if type == 9, self.helloReceived, self.forgettingNative,
+                          String(data:data,encoding:.utf8) == DeviceSettings.binding?.hostID {
+                    self.forgettingNative = false; self.reconnectEnabled = false
+                    DeviceVault.remove(DeviceVault.credentialAccount); DeviceVault.remove(TunnelIdentity.account)
+                    UserDefaults.standard.removeObject(forKey:DeviceSettings.bindingKey)
+                    UserDefaults.standard.removeObject(forKey:"nativeConnectionEnabled.v1"); UserDefaults.standard.synchronize()
+                    try? FileManager.default.removeItem(at:StartupAgent.path(role:"Host"))
+                    self.trustedCredential = nil
+                    self.stop(message:"Display forgotten. Install/open Viewer to approve a new Host.",reconnect:false)
                 } else if type == 3, self.helloReceived { self.capture?.acknowledge(data) }
                 else { peer.cancel() }
             }

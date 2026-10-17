@@ -29,7 +29,7 @@ final class HostSetupController: NSObject, NSWindowDelegate {
     let heading = Design.text("Your iMac, ready as a display.",28,.bold)
     let descriptionText = Design.text("Set everything up here. Your iMac won’t need its own keyboard or mouse for everyday use.",14,secondary:true)
     let noticeTitle = Design.text("One quick preparation",13,.semibold)
-    let notice = Design.text("On a new iMac, turn on Remote Login in System Preferences → Sharing once. RetinaLink then installs Viewer and completes setup from this Mac.",12,secondary:true)
+    let notice = Design.text("This advanced account-management flow uses Remote Login to administer the iMac. Normal Add Display setup and daily streaming do not require it. Account changes need explicit administrator authorization; FileVault is never changed.",12,secondary:true)
     let result = Design.text("",12,secondary:true)
     let startup = NSButton(checkboxWithTitle:"Open Viewer automatically after iMac sign-in",target:nil,action:nil)
     let hostStartup = NSButton(checkboxWithTitle:"Start RetinaLink automatically when this Mac signs in",target:nil,action:nil)
@@ -130,7 +130,7 @@ final class HostSetupController: NSObject, NSWindowDelegate {
     @objc func back() {
         guard !busy else { return }; stage = "address"; preflight = nil; connection = nil
         section("setupChoices")?.isHidden = true; section("setupTargetFields")?.isHidden = false; heading.stringValue = "Your iMac, ready as a display."
-        noticeTitle.stringValue = "One quick preparation"; notice.stringValue = "Enable Remote Login on a new iMac once, then complete the rest here."
+        noticeTitle.stringValue = "Advanced account management"; notice.stringValue = "Remote Login is used for this optional administrator operation. Normal pairing and streaming connect directly without it."
         continueButton.title = "Continue"; backButton.isHidden = true; setBusy(false,message:"")
     }
     @objc func showLoginGuide() {

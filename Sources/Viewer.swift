@@ -22,6 +22,9 @@ final class ViewerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
     var desiredFullscreen = true
     let softwareUpdater = AutomaticUpdater()
     var hostSupportsUpdates = false
+    let nativeDiscovery = NativeDiscovery(), nativeSetup = NativeViewerSetup()
+    var nativeHostAddress:String?
+    var directConnection = false
     func applicationDidFinishLaunching(_ notification: Notification) {
         installMenu(); addMaintenanceMenu()
         do { try DedicatedViewerStartup.applyPendingEnrollment() }
@@ -32,6 +35,12 @@ final class ViewerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         desiredFullscreen = !LaunchOptions.has("--windowed-viewer")
         automatic = !LaunchOptions.has("--standby-only")
         makeStandbyWindow()
+        nativeSetup.onStatus = { [weak self] text in
+            guard let self = self, DeviceSettings.binding == nil else { return }
+            self.showStandby("Your iMac is ready.",detail:text,phase:"ready")
+        }
+        nativeSetup.onPaired = { [weak self] in self?.startNativeDiscovery(); self?.softwareUpdater.start(); self?.connect() }
+        if DeviceSettings.binding == nil { nativeSetup.start() } else { startNativeDiscovery() }
         DiagnosticLog.shared.record("launch","Viewer appliance ready; fullscreen and automatic reconnection; UI capture helper unused")
         uiTimer = Timer.scheduledTimer(withTimeInterval:1,repeats:true) { [weak self] _ in self?.publishState() }
         NSWorkspace.shared.notificationCenter.addObserver(self,selector:#selector(woke),name:NSWorkspace.didWakeNotification,object:nil)
@@ -62,7 +71,7 @@ final class ViewerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         if desiredFullscreen { NSApp.presentationOptions = [.autoHideDock,.autoHideMenuBar] }
         NSApp.activate(ignoringOtherApps:true)
         if !desiredFullscreen { window.center() }
-        if DeviceSettings.binding == nil { subtitle.stringValue = "Open RetinaLink on your main Mac and choose Add Display." }
+        if DeviceSettings.binding == nil { subtitle.stringValue = "Install and open Host on your main Mac, then choose Add Display. Approve that Mac here once. No Remote Login needed." }
         else { showStandby("Waiting for your Mac…",detail:"Your display will connect automatically. No action is needed here.",phase:"waiting") }
     }
     func showStandby(_ title: String, detail: String, phase: String) {
@@ -89,7 +98,16 @@ final class ViewerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
             } else if let saved = UserDefaults.standard.string(forKey:"viewerShortCode"), !saved.isEmpty {
                 credential = try normalizedCode(saved)
             } else { return }
-            let address = binding == nil ? (UserDefaults.standard.string(forKey:"viewerAddress") ?? "") : "127.0.0.1"
+            directConnection = binding != nil && !LaunchOptions.has("--legacy-ssh-transport")
+            let address:String
+            if binding == nil { address = UserDefaults.standard.string(forKey:"viewerAddress") ?? "" }
+            else if directConnection {
+                guard let resolved = nativeHostAddress ?? NativeConnectionSettings.hostAddress else {
+                    showStandby("Waiting for your Mac…",detail:"Viewer finds your trusted Mac on the local network. Remote Login is not needed.",phase:"waiting")
+                    scheduleReconnect(); return
+                }
+                address = resolved
+            } else { address = "127.0.0.1" }
             guard DeviceBinding.validAddress(address) else { throw LinkError.invalid("Set up this display from your main Mac.") }
             let view = try DisplayView(viewer:true); view.translatesAutoresizingMaskIntoConstraints = false
             display?.removeFromSuperview(); display = view
@@ -106,11 +124,12 @@ final class ViewerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
             peer.onReady = { [weak self,weak peer] in
                 guard let peer = peer else { return }
                 FrameTrace.shared.event("viewer_session",fields:["link":peer.traceID,"view":view.traceID])
-                let hello = Hello(version:1,bc7:true,name:Host.current().localizedName ?? "iMac",maxFramesInFlight:3,chunkedPacking:true,appVersion:LaunchOptions.version,appBuild:LaunchOptions.build,automaticUpdates:true)
+                let hello = Hello(version:1,bc7:true,name:Host.current().localizedName ?? "iMac",maxFramesInFlight:3,chunkedPacking:true,appVersion:LaunchOptions.version,appBuild:LaunchOptions.build,automaticUpdates:true,directConnection:self?.directConnection == true)
                 if let data = try? JSONEncoder().encode(hello) { peer.send(1,data) }
                 DispatchQueue.main.async {
                     guard let self = self, self.link === peer else { return }
                     self.connected = true
+                    if self.directConnection { NativeConnectionSettings.enable(); NativeConnectionSettings.rememberHost(address) }
                     self.showStandby("Connected to \(binding?.hostName ?? "your Mac")",detail:"Preparing your extended desktop…",phase:"connected")
                     DiagnosticLog.shared.record("state","Connected · encrypted · \(binding == nil ? "legacy pairing" : "trusted device")")
                 }
@@ -153,6 +172,24 @@ final class ViewerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
                             self.standby.isHidden = false
                             DispatchQueue.main.asyncAfter(deadline:.now()+3) { [weak self] in if self?.receivedFrame == true, self?.paused == false { self?.standby.isHidden = true } }
                         }
+                    }
+                } else if type == 8, binding != nil, data.count <= 64,
+                          String(data:data,encoding:.utf8) == binding?.hostID {
+                    DispatchQueue.main.async {
+                        guard let self = self, self.link === peer, let binding = DeviceSettings.binding else { return }
+                        do {
+                            _ = try ViewerEnrollment.remove(nativeJSON(["hostID":binding.hostID]))
+                            UserDefaults.standard.removeObject(forKey:"nativeConnectionEnabled.v1")
+                            UserDefaults.standard.removeObject(forKey:"nativeHostAddress.v1")
+                            self.nativeDiscovery.stop()
+                            peer.send(9,data) { DispatchQueue.main.async {
+                                self.link = nil; peer.cancel(); self.connected = false; self.receivedFrame = false
+                                self.statsTimer?.invalidate(); self.statsTimer = nil; self.activity = nil
+                                self.display?.removeFromSuperview(); self.display = nil
+                                self.showStandby("Your iMac is ready.",detail:"Approve a new Host to connect this display.",phase:"ready")
+                                self.nativeSetup.start()
+                            } }
+                        } catch { peer.cancel(reason:"Pairing could not be removed. Check Viewer locally.") }
                     }
                 } else { peer.cancel(reason:"Unknown display message") }
             }
@@ -197,6 +234,15 @@ final class ViewerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let work = DispatchWorkItem { [weak self] in self?.connect() }; reconnect = work
         DispatchQueue.main.asyncAfter(deadline:.now()+3,execute:work)
     }
+    func startNativeDiscovery() {
+        guard let binding = DeviceSettings.binding, !LaunchOptions.has("--legacy-ssh-transport") else { return }
+        nativeDiscovery.onChange = { [weak self] results in
+            guard let self = self, let result = results.first else { return }
+            self.nativeHostAddress = result.address
+            if self.link == nil { self.connect() }
+        }
+        nativeDiscovery.start(type:serviceType,hostID:binding.hostID)
+    }
     @objc func woke() { if link == nil { connect() }; if desiredFullscreen, let frame = NSScreen.main?.frame { window.setFrame(frame,display:true); window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps:true) } }
     func publishState() {
         guard let path = LaunchOptions.value("--ui-state-path") ?? Optional(NSHomeDirectory()+"/Library/Logs/RetinaLink/Viewer-ui.json") else { return }
@@ -206,6 +252,7 @@ final class ViewerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
             "systemUIAutoHidden":NSApp.presentationOptions.contains(.autoHideDock) && NSApp.presentationOptions.contains(.autoHideMenuBar),
             "standbyVisible":standby?.isHidden == false,"automaticReconnect":automatic,"displayWindows":window == nil ? 0 : 1,
             "startupInstalled":FileManager.default.fileExists(atPath:StartupAgent.path(role:"Viewer").path),
+            "transport":directConnection ? "direct-tls" : "legacy", "requiresRemoteLogin":!directConnection,
             "time":Date().timeIntervalSince1970,"windowFrame":NSStringFromRect(window?.frame ?? .zero)]
         if let data = try? JSONSerialization.data(withJSONObject:state,options:.sortedKeys) { try? data.write(to:URL(fileURLWithPath:path),options:.atomic); try? FileManager.default.setAttributes([.posixPermissions:0o600],ofItemAtPath:path) }
     }
@@ -214,7 +261,14 @@ final class ViewerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         menu.addItem(withTitle:"Show Standby Screen",action:#selector(showMaintenance),keyEquivalent:"s").target = self
         menu.addItem(withTitle:"Copy Diagnostics",action:#selector(copyDiagnostics),keyEquivalent:"d").target = self
         menu.addItem(withTitle:"Return to Full Screen",action:#selector(restoreFullscreen),keyEquivalent:"f").target = self
+        menu.addItem(withTitle:"Make Discoverable for Setup",action:#selector(makeDiscoverable),keyEquivalent:"").target = self
         item.submenu = menu; NSApp.mainMenu?.addItem(item)
+    }
+    @objc func makeDiscoverable() {
+        guard DeviceSettings.binding == nil else {
+            showStandby("Already paired with \(DeviceSettings.binding!.hostName)",detail:"Your pairing is kept. Viewer reconnects directly without Remote Login. Manage this display from Host.",phase:"maintenance"); return
+        }
+        nativeSetup.stop(); nativeSetup.start()
     }
     @objc func showMaintenance() { showStandby("Your RetinaLink display",detail:"Manage pairing and connection from your main Mac. Quit RetinaLink from the menu for local maintenance.",phase:"maintenance") }
     @objc func restoreFullscreen() { desiredFullscreen = true; NSApp.presentationOptions = [.autoHideDock,.autoHideMenuBar]; if let frame = NSScreen.main?.frame { window.setFrame(frame,display:true) }; if receivedFrame && !paused { standby.isHidden = true }; window.makeKeyAndOrderFront(nil) }
@@ -223,6 +277,6 @@ final class ViewerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
     func windowShouldClose(_ sender: NSWindow) -> Bool { if automatic { window.orderOut(nil); return false }; return true }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
-    func applicationWillTerminate(_ notification: Notification) { DedicatedViewerStartup.release(); terminating = true; automatic = false; reconnect?.cancel(); statsTimer?.invalidate(); uiTimer?.invalidate(); link?.cancel() }
+    func applicationWillTerminate(_ notification: Notification) { nativeSetup.stop(); nativeDiscovery.stop(); DedicatedViewerStartup.release(); terminating = true; automatic = false; reconnect?.cancel(); statsTimer?.invalidate(); uiTimer?.invalidate(); link?.cancel() }
 }
 #endif

@@ -216,8 +216,8 @@ def advance(args):
     package.mkdir(exist_ok=True)
     run(['/usr/bin/ditto', apps['Host'], package/'RetinaLink Host.app'])
     (package/'Start Here.txt').write_text(
-        'Open RetinaLink Host on your main Mac from a permanent Applications folder. Choose Add Display.\n'
-        'Viewer is included and installed from Host. Sign in on a new iMac and enable Remote Login, restricted to the needed account. Remote Login must stay enabled during use: this version uses SSH for both setup and the display connection. Full disk access for remote users is not required.\n'
+        'Install/open RetinaLink Host on your main Mac from a permanent Applications folder. Install/open Viewer on your iMac once, then choose Add Display on Host.\n'
+        'Viewer is bundled in Host: use Save Viewer Installer to transfer its signed ZIP, or use the separate Viewer DMG. Compare the eight-digit number on both screens and approve both Macs once. Standard pairing and display streaming do not require Remote Login or an iMac account password. Existing pairs keep their saved trust.\n'
         'Allow Screen Recording on the main Mac when macOS asks. After setup, Viewer starts fullscreen after sign-in and reconnects automatically.\n'
         'FileVault stays unchanged. Standard setup leaves login settings unchanged. Optional Dedicated Display Setup creates a standard account with automatic login and no idle password lock after explicit administrator authorization. FileVault on an Intel iMac still needs disk unlock after restart.\n'
         'For future Viewer upgrades, choose Update Display Software on Host. Pairing is retained between releases signed by the same developer.\n')

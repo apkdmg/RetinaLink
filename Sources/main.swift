@@ -2,6 +2,15 @@ import AppKit
 
 if ProcessInfo.processInfo.environment["RETINALINK_SSH_ASKPASS"] == "1" { runSSHAskpass() }
 
+if LaunchOptions.has("--native-test-harness") {
+    guard DeviceSettings.nativeTestScope != nil else { exit(2) }
+    let app = NSApplication.shared; app.setActivationPolicy(.regular)
+    let delegate = NativeTestHarness(); app.delegate = delegate; app.run(); exit(0)
+}
+if LaunchOptions.has("--native-pairing-test") {
+    do { try runNativeTests(); exit(0) } catch { fputs("FAIL: \(error)\n",stderr); exit(1) }
+}
+
 #if !HOST
 if LaunchOptions.has("--device-status") {
     // Non-secret update metadata only. No Keychain access or credential export.

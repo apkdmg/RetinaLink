@@ -2,8 +2,8 @@ import Foundation
 import Security
 import AppKit
 
-// Enrollment travels only over an authenticated SSH session. Network discovery
-// never carries a credential or grants permission to replace a trusted device.
+// Enrollment requires an authenticated legacy SSH session or explicit local
+// approval on BOTH displays in NativePairSession. Discovery never grants trust.
 enum FileVaultState: String, Codable {
     case on, off, unknown
     init(output: String) {
@@ -74,7 +74,10 @@ enum DeviceVault {
     // Developer ID releases keep a stable namespace and signing requirement.
     // Ad-hoc development builds have hash-specific Keychain ACLs, so they must
     // re-enroll instead of silently asking to trust a changed executable.
-    static var service: String { Bundle.main.object(forInfoDictionaryKey:"RetinaLinkTrustNamespace") as? String ?? "local.retinalink.development.\(LaunchOptions.build)" }
+    static var service: String {
+        let base = Bundle.main.object(forInfoDictionaryKey:"RetinaLinkTrustNamespace") as? String ?? "local.retinalink.development.\(LaunchOptions.build)"
+        return DeviceSettings.nativeTestScope.map { base+".native-test."+$0 } ?? base
+    }
     private static let accessLock = NSLock()
     static func silently<T>(_ operation: () throws -> T) throws -> T {
         accessLock.lock(); defer { accessLock.unlock() }
@@ -138,20 +141,30 @@ enum DeviceVault {
 }
 
 enum DeviceSettings {
+    // Explicit integration-test isolation. Production launch agents never carry
+    // these arguments; the test harness cannot access the real pairing vault.
+    static var nativeTestScope:String? {
+        guard LaunchOptions.has("--native-test-harness"), let value = LaunchOptions.value("--native-test-scope"), UUID(uuidString:value) != nil else { return nil }
+        return value
+    }
+    static var defaults:UserDefaults {
+        guard let scope = nativeTestScope else { return .standard }
+        return UserDefaults(suiteName:(Bundle.main.bundleIdentifier ?? "RetinaLink")+".NativeTest."+scope)!
+    }
     static let bindingKey = "trustedDisplayBinding.v1"
     static var binding: DeviceBinding? {
-        guard let data = UserDefaults.standard.data(forKey:bindingKey) else { return nil }
+        guard let data = defaults.data(forKey:bindingKey) else { return nil }
         return try? JSONDecoder().decode(DeviceBinding.self,from:data)
     }
     static func save(_ binding: DeviceBinding) throws {
         try binding.validate()
-        UserDefaults.standard.set(try JSONEncoder().encode(binding),forKey:bindingKey)
-        UserDefaults.standard.synchronize()
+        defaults.set(try JSONEncoder().encode(binding),forKey:bindingKey)
+        defaults.synchronize()
     }
     static var hostID: String {
-        if let saved = UserDefaults.standard.string(forKey:"stableHostID"), UUID(uuidString:saved) != nil { return saved }
+        if let saved = defaults.string(forKey:"stableHostID"), UUID(uuidString:saved) != nil { return saved }
         let value = UUID().uuidString
-        UserDefaults.standard.set(value,forKey:"stableHostID"); return value
+        defaults.set(value,forKey:"stableHostID"); return value
     }
     static func folder() throws -> URL {
         let url = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/RetinaLink",isDirectory:true)

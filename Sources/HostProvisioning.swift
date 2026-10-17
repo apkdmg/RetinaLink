@@ -222,7 +222,17 @@ final class TunnelSupervisor {
         timer.schedule(deadline:.now(),repeating:12)
         timer.setEventHandler { [weak self] in self?.ensure() }; self.timer = timer; timer.resume()
     }
-    func stop() { queue.async { self.active = false; self.timer?.cancel(); self.timer = nil } }
+    func stop(disconnect:Bool = false) { queue.async {
+        self.active = false; self.timer?.cancel(); self.timer = nil
+        if disconnect { Self.disconnectExisting() }
+    } }
+    static func disconnectExisting() {
+        guard let binding = DeviceSettings.binding, let folder = try? DeviceSettings.folder() else { return }
+        let socket = folder.appendingPathComponent("display-tunnel").path
+        guard FileManager.default.fileExists(atPath:socket) else { return }
+        // A control operation on our own saved socket, never a new SSH login.
+        _ = try? SystemTask.run("/usr/bin/ssh",["-S",socket,"-O","exit","-o","BatchMode=yes","-l",binding.username,binding.address],timeout:8)
+    }
     private func ensure() {
         guard active, let binding = DeviceSettings.binding else { return }
         do {

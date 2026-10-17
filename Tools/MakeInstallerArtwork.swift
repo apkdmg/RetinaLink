@@ -4,6 +4,7 @@ import AppKit
 let destination = URL(fileURLWithPath:CommandLine.arguments[1], isDirectory:true)
 let version = CommandLine.arguments[2]
 let app = URL(fileURLWithPath:CommandLine.arguments[3], isDirectory:true)
+let role = CommandLine.arguments.count > 4 ? CommandLine.arguments[4] : "Host"
 let width: CGFloat = 800, height: CGFloat = 570
 try FileManager.default.createDirectory(at:destination,withIntermediateDirectories:true)
 let ink = NSColor(srgbRed:0.12, green:0.15, blue:0.23, alpha:1)
@@ -46,7 +47,7 @@ func artwork(preview:Bool,scale:Int)->NSBitmapImageRep {
     text("RetinaLink",44,30,300,20,.semibold,accent)
     text(version,658,35,98,12,.medium,secondary,true)
     text("Your iMac. A second display.",44,87,720,32,.semibold)
-    text("Install Host on this Mac. Host takes care of Viewer on your iMac.",44,135,720,15,.regular,secondary)
+    text(role == "Host" ? "Install Host here. Open Viewer on your iMac once." : "Install Viewer on your iMac. Approve your main Mac once.",44,135,720,15,.regular,secondary)
     glass(rect(146,194,148,148),32)
     glass(rect(506,194,148,148),32)
     // A quiet directional affordance between the two draggable Finder icons.
@@ -57,12 +58,12 @@ func artwork(preview:Bool,scale:Int)->NSBitmapImageRep {
     arrow.lineCapStyle = .round; arrow.lineJoinStyle = .round; arrow.stroke()
     text("DRAG TO INSTALL",334,287,132,10,.semibold,secondary,true)
     glass(rect(40,382,720,148),24)
-    text("Open Host. Add your display.",64,405,490,18,.semibold)
-    text("After copying, open RetinaLink Host from Applications.\nChoose Add Display to install and pair your iMac.",64,437,493,13,.regular,secondary)
-    text("iMac setup requires Remote Login to stay enabled.",64,492,495,12,.medium,secondary)
+    text(role == "Host" ? "Open Host. Add your display." : "Open Viewer. Approve your Mac.",64,405,490,18,.semibold)
+    text(role == "Host" ? "Open Host from Applications and choose Add Display.\nCompare the number on both Macs to pair once." : "Open Viewer from Applications on your iMac.\nOn your main Mac, open Host and choose Add Display.",64,437,493,13,.regular,secondary)
+    text("Connects directly. Remote Login is not required.",64,492,495,12,.medium,secondary)
     if preview {
         let images:[(String,NSImage,CGFloat,CGFloat)] = [
-            ("RetinaLink Host",NSImage(contentsOf:app.appendingPathComponent("Contents/Resources/AppIcon.icns"))!,220,260),
+            ("RetinaLink "+role,NSImage(contentsOf:app.appendingPathComponent("Contents/Resources/AppIcon.icns"))!,220,260),
             ("Applications",NSWorkspace.shared.icon(forFile:"/Applications"),580,260),
             ("Setup Guide",NSWorkspace.shared.icon(forFile:destination.appendingPathComponent("Setup Guide.html").path),666,449)]
         for (name,icon,x,y) in images {

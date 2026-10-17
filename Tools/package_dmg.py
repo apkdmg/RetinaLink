@@ -21,6 +21,9 @@ from signing import select_identity, verify_app
 LOCATIONS = {'RetinaLink Host.app': (220, 260), 'Applications': (580, 260),
              'Setup Guide.html': (666, 449)}
 
+def locations(role):
+    return {name.replace('Host.app', role+'.app'): point for name, point in LOCATIONS.items()}
+
 
 def save(directory, state):
     temp = directory/'dmg-state.next'
@@ -50,6 +53,8 @@ def release_state(directory):
 def prepare(args):
     import dmgbuild  # Project-local build dependency, never shipped to users.
     release = release_state(args.release.resolve())
+    if tuple(int(x) for x in release['apps']['Host']['version'].split('.')) < (0,6,0):
+        raise ValueError('The current no-SSH installation guide requires RetinaLink 0.6.0 or later. Use the historical packager for older releases.')
     identity = select_identity(release['identity']['identity'])
     directory = args.directory.resolve()
     if directory.exists() and any(directory.iterdir()):
@@ -61,11 +66,12 @@ def prepare(args):
     guide = assets/'Setup Guide.html'
     guide.write_text((ROOT/'Resources/Installer/Setup Guide.html').read_text()
                      .replace('@VERSION@', html.escape(version)).replace('@BUILD@', html.escape(build)))
-    app = args.release.resolve()/'build/apps/RetinaLink Host.app'
+    role = args.role
+    app = args.release.resolve()/f'build/apps/RetinaLink {role}.app'
     run(['/usr/bin/xcrun', 'swiftc', '-module-cache-path', directory/'module-cache',
          ROOT/'Tools/MakeInstallerArtwork.swift', '-o', directory/'make-artwork'])
-    run([directory/'make-artwork', assets, version+' · '+build, app])
-    image = directory/f'RetinaLink-{version}.dmg'
+    run([directory/'make-artwork', assets, version+' · '+build, app, role])
+    image = directory/('RetinaLink-'+('Viewer-' if role == 'Viewer' else '')+version+'.dmg')
     settings = {
         'format': 'UDZO', 'filesystem': 'HFS+', 'compression_level': 9,
         'files': [str(app), str(guide)], 'symlinks': {'Applications': '/Applications'},
@@ -73,7 +79,7 @@ def prepare(args):
         'background': str(assets/'Installer Background.tiff'),
         # Hiding an app extension adds FinderInfo that strict codesign rejects.
         # Never add Finder decorations to a signed application bundle.
-        'icon_locations': LOCATIONS, 'hide_extensions': ['Setup Guide.html'],
+        'icon_locations': locations(role), 'hide_extensions': ['Setup Guide.html'],
         'window_rect': ((140, 140), (800, 570)), 'default_view': 'icon-view',
         'show_status_bar': False, 'show_tab_view': False, 'show_toolbar': False,
         'show_pathbar': False, 'show_sidebar': False, 'show_icon_preview': False,
@@ -85,7 +91,7 @@ def prepare(args):
     run(['/usr/bin/codesign', '--sign', identity['identity'], '--timestamp',
          '--identifier', 'local.retinalink.Installer', image])
     verify_signature(image, identity)
-    state = {'format': 1, 'release_directory': str(args.release.resolve()),
+    state = {'format': 1, 'role':role, 'release_directory': str(args.release.resolve()),
              'identity': identity, 'profile': release['profile'], 'apps': release['apps'],
              'viewer_archive_sha256': release['stapled_viewer_embedded'],
              'file': image.name, 'prepared_sha256': digest(image), 'complete': False}
@@ -119,15 +125,16 @@ def mounted(image, directory):
 def verify_contents(directory, state):
     from ds_store import DSStore
     image = directory/state['file']
+    role = state.get('role', 'Host')
     run(['/usr/bin/hdiutil', 'verify', image], capture_output=True)
     with mounted(image, directory) as mount:
         visible = {p.name for p in mount.iterdir() if not p.name.startswith('.')}
-        if visible != set(LOCATIONS):
+        if visible != set(locations(role)):
             raise ValueError('Unexpected visible items in DMG: '+repr(visible))
         if not (mount/'Applications').is_symlink() or (mount/'Applications').readlink() != pathlib.Path('/Applications'):
             raise ValueError('Applications shortcut must point to /Applications.')
         with DSStore.open(str(mount/'.DS_Store'), 'r') as store:
-            for name, expected in LOCATIONS.items():
+            for name, expected in locations(role).items():
                 if tuple(store[name]['Iloc'][:2]) != expected:
                     raise ValueError('Finder icon position differs: '+name)
             view = store['.']['icvp']
@@ -136,30 +143,31 @@ def verify_contents(directory, state):
             window = store['.']['bwsp']
             if window['ShowToolbar'] or window['ShowSidebar'] or window['ShowStatusBar']:
                 raise ValueError('Unexpected Finder chrome in installer.')
-        app = mount/'RetinaLink Host.app'
-        if verify_app(app, state['identity'], 'Host') != state['apps']['Host']:
-            raise ValueError('Host in the DMG differs from the signed release.')
+        app = mount/f'RetinaLink {role}.app'
+        if verify_app(app, state['identity'], role) != state['apps'][role]:
+            raise ValueError(role+' in the DMG differs from the signed release.')
         run(['/usr/bin/xcrun', 'stapler', 'validate', app])
         run(['/usr/sbin/spctl', '--assess', '--type', 'execute', '--verbose=2', app])
         viewer_zip = app/'Contents/Resources/RetinaLink Viewer.zip'
-        if digest(viewer_zip) != state['viewer_archive_sha256']:
+        if role == 'Host' and digest(viewer_zip) != state['viewer_archive_sha256']:
             raise ValueError('Bundled Viewer changed while packaging.')
         with tempfile.TemporaryDirectory(prefix='verify-install-', dir=directory) as folder:
             # A drag-copy equivalent to a disposable folder, leaving /Applications
             # and the currently running app/pairing untouched.
             copied = pathlib.Path(folder)/app.name
             run(['/usr/bin/ditto', app, copied])
-            if verify_app(copied, state['identity'], 'Host') != state['apps']['Host']:
-                raise ValueError('Host identity was not preserved by copying.')
+            if verify_app(copied, state['identity'], role) != state['apps'][role]:
+                raise ValueError(role+' identity was not preserved by copying.')
             run(['/usr/bin/xcrun', 'stapler', 'validate', copied])
-            run(['/usr/bin/ditto', '-x', '-k', viewer_zip, folder])
-            viewer = pathlib.Path(folder)/'RetinaLink Viewer.app'
-            if verify_app(viewer, state['identity'], 'Viewer') != state['apps']['Viewer']:
-                raise ValueError('Embedded Viewer differs from the signed release.')
-            run(['/usr/bin/xcrun', 'stapler', 'validate', viewer])
-            run(['/usr/sbin/spctl', '--assess', '--type', 'execute', '--verbose=2', viewer])
-        report = {'hostIdentityUnchanged': True, 'bundledViewerUnchanged': True,
-                  'hostAndViewerTicketsValid': True, 'copyPreservesHostIdentity': True,
+            if role == 'Host':
+                run(['/usr/bin/ditto', '-x', '-k', viewer_zip, folder])
+                viewer = pathlib.Path(folder)/'RetinaLink Viewer.app'
+                if verify_app(viewer, state['identity'], 'Viewer') != state['apps']['Viewer']:
+                    raise ValueError('Embedded Viewer differs from the signed release.')
+                run(['/usr/bin/xcrun', 'stapler', 'validate', viewer])
+                run(['/usr/sbin/spctl', '--assess', '--type', 'execute', '--verbose=2', viewer])
+        report = {'role':role, 'appIdentityUnchanged': True, 'bundledViewerUnchanged':role == 'Host',
+                  'appTicketsValid': True, 'copyPreservesAppIdentity': True,
                   'applicationsShortcutValid': True, 'finderIconPositionsValid': True,
                   'finderWindow': window, 'visibleItems': sorted(visible),
                   'noAppsLaunchedOrInstalled': True, 'uiCaptureHelperUsed': False}
@@ -231,12 +239,15 @@ def verify(args):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('command', choices=['prepare', 'advance', 'verify'])
+    parser.add_argument('--role', choices=['Host', 'Viewer'], default='Host')
     version = json.loads((ROOT/'Resources/Release.json').read_text())
     stem = version['version']+'-build'+str(version['build'])
     parser.add_argument('--release', type=pathlib.Path, default=ROOT/('work/release-'+stem))
-    parser.add_argument('--directory', type=pathlib.Path, default=ROOT/('work/dmg-'+stem))
+    parser.add_argument('--directory', type=pathlib.Path)
     parser.add_argument('--output', type=pathlib.Path)
     args = parser.parse_args()
+    if args.directory is None:
+        args.directory = ROOT/('work/dmg-'+stem+('-viewer' if args.role == 'Viewer' else ''))
     try:
         return {'prepare': prepare, 'advance': advance, 'verify': verify}[args.command](args)
     except (ValueError, OSError, KeyError, subprocess.CalledProcessError) as error:
