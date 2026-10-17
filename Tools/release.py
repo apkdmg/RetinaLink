@@ -219,7 +219,7 @@ def advance(args):
         'Open RetinaLink Host on your main Mac from a permanent Applications folder. Choose Add Display.\n'
         'Viewer is included and installed from Host. Enable Remote Login and sign in on a new iMac once.\n'
         'Allow Screen Recording on the main Mac when macOS asks. After setup, Viewer starts fullscreen after sign-in and reconnects automatically.\n'
-        'FileVault and login settings stay unchanged. FileVault on an Intel iMac still needs disk unlock after restart.\n'
+        'FileVault stays unchanged. Standard setup leaves login settings unchanged. Optional Dedicated Display Setup creates a standard account with automatic login and no idle password lock after explicit administrator authorization. FileVault on an Intel iMac still needs disk unlock after restart.\n'
         'For future Viewer upgrades, choose Update Display Software on Host. Pairing is retained between releases signed by the same developer.\n')
     final_zip = directory/(package.name+'.zip')
     archive(package, final_zip)

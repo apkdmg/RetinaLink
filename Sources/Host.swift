@@ -394,7 +394,7 @@ final class HostApp: NSObject, NSApplicationDelegate {
             displaySubtitle.stringValue = displayPaused ? "Paused · still securely paired" : (capture == nil ? "Ready to connect · Native 5K" : "Extended desktop · Native 5K")
             homeStatus.stringValue = waitingForPermission ? "Allow Screen Recording on this Mac to continue" : (displayPaused ? "Ready whenever you are" : (startingCapture ? "Preparing your desktop…" : (capture == nil ? "Waiting for your iMac" : "Connected securely")))
             homeStatus.textColor = waitingForPermission ? .systemOrange : (capture == nil ? .secondaryLabelColor : .systemGreen)
-            restartNote.stringValue = binding.fileVault.setupMessage
+            restartNote.stringValue = binding.dedicatedDisplay && binding.automaticLoginConfigured ? "Dedicated display · automatic login and Viewer startup configured. FileVault unchanged. Manual locking still requires a password." : binding.fileVault.setupMessage
             button?.title = displayPaused ? "Connect" : "Disconnect"
             button?.action = #selector(toggle)
             if trustedCredential == nil {
@@ -467,6 +467,7 @@ final class HostApp: NSObject, NSApplicationDelegate {
         softwareUpdater.check(installNow:installNow)
     }
     @objc func updateViewerSoftware() {
+        if DeviceSettings.binding?.managementUsername != nil { checkUpdatesBoth(installNow:true); return }
         guard !updatingViewer, let binding = DeviceSettings.binding, trustedCredential != nil else { return }
         updatingViewer = true; connectionNote.stringValue = "Updating display software. Pairing will be preserved…"
         DispatchQueue.global(qos:.utility).async { [weak self] in
@@ -493,6 +494,10 @@ final class HostApp: NSObject, NSApplicationDelegate {
     }
     func forgetConfirmed() {
         guard let binding = DeviceSettings.binding else { return }
+        if binding.managementUsername != nil && binding.dedicatedDisplay {
+            connectionNote.stringValue = "Turn off Dedicated Mode first to restore ordinary login, then forget this display."
+            dedicatedGuide(); return
+        }
         connectionNote.stringValue = "Removing pairing securely…"
         DispatchQueue.global(qos:.utility).async { [weak self] in
             do {
@@ -513,12 +518,7 @@ final class HostApp: NSObject, NSApplicationDelegate {
     }
     @objc func dedicatedGuide() {
         addDisplay()
-        if let controller = setupController, let binding = DeviceSettings.binding {
-            controller.preflight = ViewerPreflight(name:binding.viewerName,version:"",fileVault:binding.fileVault,automaticLoginConfigured:binding.automaticLoginConfigured)
-            controller.connection = try? SetupConnection(SetupTarget(address:binding.address,username:binding.username,managementSocket:LaunchOptions.value("--ssh-control-path")))
-            controller.showLoginGuide()
-            controller.preflight = nil
-        }
+        if let controller = setupController { controller.dedicated.state = .on; controller.advance() }
     }
     @objc func addDisplay() {
         if setupController == nil { setupController = HostSetupController(host:self) }
@@ -546,7 +546,7 @@ final class HostApp: NSObject, NSApplicationDelegate {
         controller.onCompletion = { outcome in
             let report: [String:Any]
             switch outcome {
-            case .success(let binding): report = ["success":true,"fileVault":binding.fileVault.rawValue,"fileVaultChanged":false,"automaticLoginChanged":false,"startupAtLogin":binding.viewerStartup,"dedicatedDisplay":binding.dedicatedDisplay]
+            case .success(let binding): report = ["success":true,"fileVault":binding.fileVault.rawValue,"fileVaultChanged":false,"automaticLoginChanged":binding.dedicatedDisplay && binding.automaticLoginConfigured,"startupAtLogin":binding.viewerStartup,"dedicatedDisplay":binding.dedicatedDisplay]
             case .failure(let error): report = ["success":false,"error":String(describing:error)]
             }
             if let path = LaunchOptions.value("--setup-report"), let data = try? JSONSerialization.data(withJSONObject:report,options:.sortedKeys) { try? data.write(to:URL(fileURLWithPath:path),options:.atomic) }

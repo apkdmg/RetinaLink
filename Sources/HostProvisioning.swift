@@ -190,6 +190,17 @@ final class SetupConnection {
 
 enum TunnelIdentity {
     static let account = "host-tunnel-private-key"
+    static func existingOrCreate(reuse: Bool) throws -> (publicKey: String, privateKey: Data) {
+        guard reuse, let privateKey = try DeviceVault.read(account) else { return try create() }
+        let file = try DeviceSettings.folder().appendingPathComponent("public-key-"+UUID().uuidString)
+        try privateKey.write(to:file,options:.atomic); try FileManager.default.setAttributes([.posixPermissions:0o600],ofItemAtPath:file.path)
+        defer { try? FileManager.default.removeItem(at:file) }
+        let result = try SystemTask.run("/usr/bin/ssh-keygen",["-y","-f",file.path])
+        guard result.status == 0 else { throw LinkError.invalid("Could not reuse the trusted display identity.") }
+        let parts = result.text.split(whereSeparator:{ $0.isWhitespace })
+        guard parts.count >= 2, parts[0] == "ssh-ed25519", Data(base64Encoded:String(parts[1]))?.count == 51 else { throw LinkError.invalid("Invalid trusted tunnel public key.") }
+        return (parts.prefix(2).joined(separator:" ")+" RetinaLink-tunnel",privateKey)
+    }
     static func create() throws -> (publicKey: String, privateKey: Data) {
         let directory = try DeviceSettings.folder().appendingPathComponent("key-"+UUID().uuidString,isDirectory:true)
         try FileManager.default.createDirectory(at:directory,withIntermediateDirectories:false,attributes:[.posixPermissions:0o700])

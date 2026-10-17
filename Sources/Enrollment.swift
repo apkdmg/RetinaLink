@@ -14,7 +14,7 @@ enum FileVaultState: String, Codable {
     var setupMessage: String {
         switch self {
         case .on: return "FileVault is on. After a shutdown or restart, this Intel iMac needs its disk unlocked before it can become a display. RetinaLink reconnects after sign-in. Your encryption stays unchanged."
-        case .off: return "FileVault is off. Viewer will start after sign-in. For unattended restarts, the owner can separately enable automatic login in macOS. RetinaLink does not change encryption, passwords or lock settings."
+        case .off: return "FileVault is off. Viewer will start after sign-in. For unattended restarts, choose Dedicated Display setup for an optional standard account with automatic login. FileVault stays unchanged."
         case .unknown: return "We could not verify FileVault. The iMac may require a password after restarting. Viewer starts after sign-in; encryption and login settings stay unchanged."
         }
     }
@@ -33,6 +33,7 @@ struct DeviceBinding: Codable, Equatable {
     var fileVault: FileVaultState
     var automaticLoginConfigured: Bool
     var enrolledAt: Date
+    var managementUsername: String? = nil
     func validate() throws {
         guard UUID(uuidString:hostID) != nil,
               !hostName.isEmpty, hostName.utf8.count <= 160,

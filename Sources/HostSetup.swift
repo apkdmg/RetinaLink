@@ -34,6 +34,7 @@ final class HostSetupController: NSObject, NSWindowDelegate {
     let startup = NSButton(checkboxWithTitle:"Open Viewer automatically after iMac sign-in",target:nil,action:nil)
     let hostStartup = NSButton(checkboxWithTitle:"Start RetinaLink automatically when this Mac signs in",target:nil,action:nil)
     let dedicated = NSButton(checkboxWithTitle:"Use this retired iMac as a dedicated display",target:nil,action:nil)
+    let restoreDedicated = NSButton(title:"Turn Off Dedicated Mode…",target:nil,action:nil)
     let replacing = NSButton(checkboxWithTitle:"Replace this account’s previous RetinaLink pairing",target:nil,action:nil)
     var continueButton: NSButton!, backButton: NSButton!, settingsButton: NSButton!
     let spinner = NSProgressIndicator()
@@ -48,7 +49,7 @@ final class HostSetupController: NSObject, NSWindowDelegate {
         if let window = window { window.makeKeyAndOrderFront(nil); return }
         address.placeholderString = "Old-iMac.local or IP address"
         username.placeholderString = "iMac account’s short username"
-        if let saved = DeviceSettings.binding { address.stringValue = saved.address; username.stringValue = saved.username }
+        if let saved = DeviceSettings.binding { address.stringValue = saved.address; username.stringValue = saved.managementUsername ?? saved.username }
         discovered.addItem(withTitle:"Choose a nearby Mac…")
         discovered.target = self; discovered.action = #selector(selectDiscovered)
         discovered.widthAnchor.constraint(equalToConstant:450).isActive = true
@@ -58,11 +59,13 @@ final class HostSetupController: NSObject, NSWindowDelegate {
             self.discovered.addItems(withTitles:results.map(\.name))
         }; discovery.start()
         startup.state = .on; hostStartup.state = .on
+        restoreDedicated.target = self; restoreDedicated.action = #selector(restoreDedicatedMode)
+        restoreDedicated.isHidden = DeviceSettings.binding?.dedicatedDisplay != true
         replacing.isHidden = true
         dedicated.target = self; dedicated.action = #selector(dedicatedChanged)
         continueButton = Design.button("Continue",target:self,action:#selector(advance),primary:true)
         backButton = Design.button("Back",target:self,action:#selector(back)); backButton.isHidden = true
-        settingsButton = Design.button("Configure automatic login…",target:self,action:#selector(showLoginGuide)); settingsButton.isHidden = true
+        settingsButton = Design.button("What will change…",target:self,action:#selector(showLoginGuide)); settingsButton.isHidden = true
         spinner.style = .spinning; spinner.controlSize = .small; spinner.isDisplayedWhenStopped = false
         let titleRow = horizontal([Design.symbol("display.2",size:32),Design.text("Add Display",14,.semibold)])
         let fields = Design.card([
@@ -71,7 +74,7 @@ final class HostSetupController: NSObject, NSWindowDelegate {
             Design.formField("Account",field:username,hint:"Use the account name shown in the iMac’s Home folder. You’ll enter its password securely if needed.")])
         fields.identifier = NSUserInterfaceItemIdentifier("setupTargetFields")
         let choices = Design.card([Design.text("Make it automatic",17,.semibold),startup,hostStartup,dedicated,
-            Design.text("Fullscreen and reconnection are always enabled. Dedicated display mode keeps the iMac ready for its paired Host; it does not change FileVault or enable automatic login.",12,secondary:true),settingsButton,replacing])
+            Design.text("Dedicated mode creates a separate standard account, enables automatic login, and removes its idle lock. It is for retired iMacs with no personal files. FileVault stays unchanged.",12,secondary:true),settingsButton,restoreDedicated,replacing])
         choices.identifier = NSUserInterfaceItemIdentifier("setupChoices"); choices.isHidden = true
         let information = Design.card([horizontal([Design.symbol("lock.shield",size:22),noticeTitle]),notice])
         let body = Design.vertical([titleRow,heading,descriptionText,fields,information,choices,result],spacing:18)
@@ -88,7 +91,7 @@ final class HostSetupController: NSObject, NSWindowDelegate {
     }
     func setBusy(_ value: Bool, message: String) {
         busy = value; result.stringValue = message; continueButton?.isEnabled = !value; backButton?.isEnabled = !value
-        for option in [startup,hostStartup,dedicated,replacing] { option.isEnabled = !value && stage != "complete" }
+        for option in [startup,hostStartup,dedicated,replacing,restoreDedicated] { option.isEnabled = !value && stage != "complete" }
         address.isEnabled = !value && stage == "address"; username.isEnabled = !value && stage == "address"; discovered.isEnabled = !value && stage == "address"
         if value { spinner.startAnimation(nil) } else { spinner.stopAnimation(nil) }
     }
@@ -120,7 +123,9 @@ final class HostSetupController: NSObject, NSWindowDelegate {
     }
     @objc func dedicatedChanged() {
         settingsButton?.isHidden = dedicated.state != .on
-        settingsButton?.title = preflight?.fileVault.allowsAutomaticLoginGuide == true ? "Configure automatic login…" : "About FileVault and restarts…"
+        settingsButton?.title = preflight?.fileVault.allowsAutomaticLoginGuide == true ? "What will change…" : "About FileVault and restarts…"
+        if dedicated.state == .on { startup.state = .on }
+        startup.isEnabled = !busy && dedicated.state != .on
     }
     @objc func back() {
         guard !busy else { return }; stage = "address"; preflight = nil; connection = nil
@@ -130,20 +135,18 @@ final class HostSetupController: NSObject, NSWindowDelegate {
     }
     @objc func showLoginGuide() {
         let state = preflight?.fileVault ?? DeviceSettings.binding?.fileVault ?? .unknown
-        let alert = NSAlert(); alert.messageText = state.allowsAutomaticLoginGuide ? "Make a retired iMac start unattended" : "FileVault protects this iMac’s startup"
-        if state.allowsAutomaticLoginGuide {
-            alert.informativeText = "Use a dedicated, non-administrator account without personal files. Anyone with physical access can use an automatically logged-in account.\n\nOn the iMac: System Preferences → Users & Groups → Login Options → Automatic login. Choose the display account and enter its password in macOS. Also review its sleep/lock policy.\n\nYou can do this from this Mac using Screen Sharing. RetinaLink never stores that login password or changes FileVault. Company policy may prevent automatic login."
-            alert.addButton(withTitle:"Open Screen Sharing"); alert.addButton(withTitle:"Not Now")
-            if alert.runModal() == .alertFirstButtonReturn, let connection = connection {
-                DispatchQueue.global(qos:.utility).async {
-                    _ = try? connection.execute("/usr/bin/open 'x-apple.systempreferences:com.apple.preferences.users'")
-                    DispatchQueue.main.async { if let url = URL(string:"vnc://"+connection.target.address) { NSWorkspace.shared.open(url) } }
-                }
-            }
-        } else {
-            alert.informativeText = state.setupMessage+"\n\nRetinaLink cannot bypass the older iMac’s FileVault boot screen. Dedicated display mode still provides fullscreen, automatic startup after sign-in and reconnection. It never disables encryption."
-            alert.addButton(withTitle:"Understood"); alert.runModal()
-        }
+        let alert = NSAlert(); alert.messageText = state == .off ? "A dedicated account for your display" : "FileVault requires an unlock after restart"
+        alert.informativeText = state == .off ? "RetinaLink creates a standard account named RetinaLink Display and enables automatic login. Viewer starts fullscreen and reconnects to this Mac. Its screensaver and idle password lock are disabled; Viewer prevents idle system sleep while running. Manual locking still needs a password.\n\nAnyone with physical access can use this account. macOS stores a recoverable login credential for automatic login. Keep personal files out of it. Your existing account, its lock settings, and FileVault are left unchanged. Organization policies are respected.\n\nYou authorize setup once using this iMac administrator’s password on the Host. A restart is needed to enter the new account." : state.setupMessage
+        alert.addButton(withTitle:"Understood"); alert.runModal()
+    }
+    private func dedicatedAuthorization(restoring: Bool = false) -> String? {
+        let alert = NSAlert(); alert.messageText = restoring ? "Turn off unattended display startup?" : "Prepare this iMac for unattended use?"
+        alert.informativeText = restoring ? "Turn off RetinaLink automatic login, re-enable the display account’s idle lock, and remove its Viewer startup agent. The account and files are preserved. FileVault and other accounts stay unchanged. Enter the iMac administrator password below." : "Create a non-administrator RetinaLink Display account, enable automatic login, disable its idle password lock and screensaver, and keep it awake while Viewer runs. Anyone with physical access can use it. macOS stores a recoverable login credential. Existing accounts and FileVault stay unchanged.\n\nEnter the iMac administrator password for \(connection?.target.username ?? ""). It is sent over authenticated SSH and is never saved by RetinaLink. A restart will be offered after setup."
+        let password = NSSecureTextField(frame:NSRect(x:0,y:0,width:380,height:28)); password.placeholderString = "iMac administrator password"
+        alert.accessoryView = password; alert.addButton(withTitle:restoring ? "Turn Off Dedicated Mode" : "Set Up Dedicated Display"); alert.addButton(withTitle:"Cancel")
+        alert.window.initialFirstResponder = password
+        guard alert.runModal() == .alertFirstButtonReturn, !password.stringValue.isEmpty else { password.stringValue = ""; return nil }
+        let value = password.stringValue; password.stringValue = ""; return value
     }
     func install() {
         guard let connection = connection, let preflight = preflight else { return }
@@ -154,15 +157,32 @@ final class HostSetupController: NSObject, NSWindowDelegate {
             guard alert.runModal() == .alertFirstButtonReturn else { return }
         }
         let dedicated = dedicated.state == .on, viewerStartup = startup.state == .on, hostStartup = hostStartup.state == .on, replacing = replacing.state == .on
-        setBusy(true,message:"Installing Viewer and creating your private display connection…")
+        var administratorPassword: String? = nil
+        if dedicated {
+            guard preflight.fileVault == .off else { result.stringValue = preflight.fileVault.setupMessage; return }
+            guard let password = dedicatedAuthorization() else { return }; administratorPassword = password
+        }
+        setBusy(true,message:dedicated ? "Creating the dedicated display account securely…" : "Installing Viewer and creating your private display connection…")
         DispatchQueue.global(qos:.utility).async { [weak self] in
             guard let self = self else { return }
             do {
                 try connection.pinServerIdentity()
-                let keys = try TunnelIdentity.create(), credential = randomPairingCode().replacingOccurrences(of:"-",with:"")
-                let binding = DeviceBinding(hostID:DeviceSettings.hostID,hostName:Host.current().localizedName ?? "Mac Studio",viewerName:preflight.name,address:connection.target.address,username:connection.target.username,dedicatedDisplay:dedicated,viewerStartup:viewerStartup,hostStartup:hostStartup,fileVault:preflight.fileVault,automaticLoginConfigured:preflight.automaticLoginConfigured,enrolledAt:Date())
+                let reuse = DeviceSettings.binding?.address == connection.target.address
+                let keys = try TunnelIdentity.existingOrCreate(reuse:reuse)
+                let credential = (reuse ? try DeviceVault.credential() : nil) ?? randomPairingCode().replacingOccurrences(of:"-",with:"")
+                var binding = DeviceBinding(hostID:DeviceSettings.hostID,hostName:Host.current().localizedName ?? "Mac Studio",viewerName:preflight.name,address:connection.target.address,username:connection.target.username,dedicatedDisplay:dedicated,viewerStartup:viewerStartup,hostStartup:hostStartup,fileVault:preflight.fileVault,automaticLoginConfigured:preflight.automaticLoginConfigured,enrolledAt:Date())
                 try connection.transferViewer()
-                try connection.enroll(EnrollmentRequest(binding:binding,credential:credential,tunnelPublicKey:keys.publicKey),replacing:replacing)
+                if dedicated {
+                    if let old = DeviceSettings.binding, old.managementUsername == nil {
+                        UserDefaults.standard.set(try JSONEncoder().encode(old),forKey:"dedicatedPreviousBinding.v1"); UserDefaults.standard.synchronize()
+                    }
+                    binding.managementUsername = connection.target.username
+                    binding.username = "retinalinkdisplay"; binding.viewerStartup = true; binding.automaticLoginConfigured = true
+                    _ = try connection.configureDedicatedDisplay(EnrollmentRequest(binding:binding,credential:credential,tunnelPublicKey:keys.publicKey),administratorPassword:administratorPassword ?? "")
+                    administratorPassword = nil
+                } else {
+                    try connection.enroll(EnrollmentRequest(binding:binding,credential:credential,tunnelPublicKey:keys.publicKey),replacing:replacing)
+                }
                 try DeviceVault.write(Data(credential.utf8),account:DeviceVault.credentialAccount)
                 try DeviceVault.write(keys.privateKey,account:TunnelIdentity.account)
                 try DeviceSettings.save(binding)
@@ -170,20 +190,51 @@ final class HostSetupController: NSObject, NSWindowDelegate {
                 else { try? FileManager.default.removeItem(at:StartupAgent.path(role:"Host")) }
                 connection.releaseOldForward()
                 DispatchQueue.main.async { self.host?.enrollmentCompleted(binding) }
-                try connection.startViewer(startup:viewerStartup)
+                if !dedicated { try connection.startViewer(startup:viewerStartup) }
                 DispatchQueue.main.async {
-                    self.stage = "complete"; self.heading.stringValue = "Your iMac is ready."
-                    self.descriptionText.stringValue = viewerStartup ? "Everything stays paired. Viewer opens fullscreen and reconnects automatically after sign-in." : "Everything stays paired. Viewer opens fullscreen whenever you launch it on the iMac."
+                    self.stage = "complete"; self.heading.stringValue = dedicated ? "Ready for its first restart." : "Your iMac is ready."
+                    self.descriptionText.stringValue = dedicated ? "RetinaLink Display is configured for automatic login. After restarting, Viewer will open fullscreen and pair automatically." : viewerStartup ? "Everything stays paired. Viewer opens fullscreen and reconnects automatically after sign-in." : "Everything stays paired. Viewer opens fullscreen whenever you launch it on the iMac."
                     self.continueButton.title = "Done"; self.backButton.isHidden = true
-                    self.notice.stringValue = binding.fileVault.setupMessage
-                    self.setBusy(false,message:"Setup complete. FileVault, automatic login and lock settings were left unchanged.")
+                    self.notice.stringValue = dedicated ? "Automatic login is enabled only for RetinaLink Display. Manual locking and signing out still require intervention. Keep personal files out of this account." : binding.fileVault.setupMessage
+                    self.setBusy(false,message:dedicated ? "Dedicated setup complete. Restart the iMac to activate it. FileVault and existing accounts are unchanged." : "Setup complete. FileVault, automatic login and lock settings were left unchanged.")
                     self.host?.refreshHome(); self.onCompletion?(.success(binding))
+                    if dedicated { self.offerRestart(connection) }
                 }
             } catch {
+                administratorPassword = nil
+                try? connection.startViewer(startup:viewerStartup)
                 DispatchQueue.main.async {
+                    self.restoreDedicated.isHidden = false
                     if String(describing:error).contains("belongs to another Host") { self.replacing.isHidden = false }
                     self.setBusy(false,message:String(describing:error)); self.onCompletion?(.failure(error))
                 }
+            }
+        }
+    }
+    @objc func restoreDedicatedMode() {
+        guard !busy, let connection = connection else { return }
+        guard let password = dedicatedAuthorization(restoring:true) else { return }
+        setBusy(true,message:"Turning off dedicated automatic login…")
+        DispatchQueue.global(qos:.utility).async { [weak self] in
+            guard let self = self else { return }
+            do {
+                let keys = try TunnelIdentity.existingOrCreate(reuse:true)
+                let credential = try DeviceVault.credential() ?? randomPairingCode().replacingOccurrences(of:"-",with:"")
+                let binding = DeviceSettings.binding ?? DeviceBinding(hostID:DeviceSettings.hostID,hostName:"Mac",viewerName:"iMac",address:connection.target.address,username:"retinalinkdisplay",dedicatedDisplay:true,viewerStartup:true,hostStartup:true,fileVault:.off,automaticLoginConfigured:true,enrolledAt:Date())
+                _ = try connection.configureDedicatedDisplay(EnrollmentRequest(binding:binding,credential:credential,tunnelPublicKey:keys.publicKey),administratorPassword:password,operation:"restore")
+                if let data = UserDefaults.standard.data(forKey:"dedicatedPreviousBinding.v1"), let old = try? JSONDecoder().decode(DeviceBinding.self,from:data) { try DeviceSettings.save(old) }
+                else if var current = DeviceSettings.binding { current.dedicatedDisplay = false; current.automaticLoginConfigured = false; current.viewerStartup = false; try DeviceSettings.save(current) }
+                DispatchQueue.main.async { self.restoreDedicated.isHidden = true; self.setBusy(false,message:"Automatic login is off. The display account and files were preserved; its idle lock is enabled. Restart and sign into your original account to use it again."); self.host?.refreshHome() }
+            } catch { DispatchQueue.main.async { self.setBusy(false,message:String(describing:error)) } }
+        }
+    }
+    func offerRestart(_ connection: SetupConnection) {
+        let alert = NSAlert(); alert.messageText = "Restart the iMac to use dedicated display mode"
+        alert.informativeText = "Save any work on the iMac first. macOS will request a normal restart and may ask about unsaved documents. RetinaLink will reconnect when the dedicated account signs in."
+        alert.addButton(withTitle:"Restart Later"); alert.addButton(withTitle:"Restart iMac")
+        if alert.runModal() == .alertSecondButtonReturn {
+            DispatchQueue.global(qos:.utility).async {
+                _ = try? connection.execute("/usr/bin/osascript -e 'tell application \"System Events\" to restart'")
             }
         }
     }

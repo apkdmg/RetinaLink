@@ -24,6 +24,9 @@ final class ViewerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
     var hostSupportsUpdates = false
     func applicationDidFinishLaunching(_ notification: Notification) {
         installMenu(); addMaintenanceMenu()
+        do { try DedicatedViewerStartup.applyPendingEnrollment() }
+        catch { DiagnosticLog.shared.record("setup",String(describing:error)) }
+        DedicatedViewerStartup.keepReady()
         UpdateSettings.applyLaunchOptions()
         if UpdateSettings.returnToStartupAgentIfNeeded() { return }
         desiredFullscreen = !LaunchOptions.has("--windowed-viewer")
@@ -71,6 +74,10 @@ final class ViewerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         publishState()
     }
     func connect() {
+        if DeviceSettings.binding == nil {
+            do { try DedicatedViewerStartup.applyPendingEnrollment(); DedicatedViewerStartup.keepReady() }
+            catch { DiagnosticLog.shared.record("setup",String(describing:error)) }
+        }
         guard automatic, !terminating, link == nil else { return }
         hostSupportsUpdates = false
         reconnect?.cancel(); reconnect = nil
@@ -216,6 +223,6 @@ final class ViewerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
     func windowShouldClose(_ sender: NSWindow) -> Bool { if automatic { window.orderOut(nil); return false }; return true }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
-    func applicationWillTerminate(_ notification: Notification) { terminating = true; automatic = false; reconnect?.cancel(); statsTimer?.invalidate(); uiTimer?.invalidate(); link?.cancel() }
+    func applicationWillTerminate(_ notification: Notification) { DedicatedViewerStartup.release(); terminating = true; automatic = false; reconnect?.cancel(); statsTimer?.invalidate(); uiTimer?.invalidate(); link?.cancel() }
 }
 #endif

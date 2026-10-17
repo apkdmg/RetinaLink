@@ -7,6 +7,8 @@ RetinaLink test processes and the app-owned display tunnel.
 """
 import argparse,json,os,pathlib,plistlib,re,shutil,signal,subprocess,time
 p=argparse.ArgumentParser();p.add_argument('--host-app',type=pathlib.Path,required=True);p.add_argument('--address',required=True);p.add_argument('--user',required=True);p.add_argument('--socket',type=pathlib.Path,required=True);p.add_argument('--workspace',type=pathlib.Path,required=True);p.add_argument('--dedicated-display',action='store_true');a=p.parse_args()
+if a.dedicated_display:
+ p.error('Dedicated mode now configures privileged account/login policy. Use Host’s guided setup and Tools/test_dedicated_display.py; this harness tests ordinary after-sign-in setup only.')
 root=a.workspace.resolve();out=root/'work/setup-030';out.mkdir(mode=0o700,parents=True,exist_ok=True);control=out/'control';control.mkdir(mode=0o700,exist_ok=True)
 ssh=['/usr/bin/ssh','-S',str(a.socket.resolve()),'-o','BatchMode=yes','-o','ConnectTimeout=5','-l',a.user,a.address]
 def remote(cmd):return subprocess.check_output(ssh+[cmd],text=True,stderr=subprocess.PIPE,timeout=30)
