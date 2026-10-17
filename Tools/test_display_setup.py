@@ -99,5 +99,5 @@ wait_for('Viewer observes tunnel interruption and stays fullscreen',lambda:(s if
 wait_for('Host repairs its tunnel using saved identity without passwords',lambda:viewer()['phase']=='streaming',75)
 after=settings();(out/'settings-after.txt').write_text(after);assert after==before,'FileVault or automatic-login status changed'
 assert_helper_off();final=viewer();(out/'viewer-final.json').write_text(json.dumps(final,indent=2))
-(out/'result.json').write_text(json.dumps({'success':True,'version':'0.3.0','dedicatedDisplay':a.dedicated_display,'fileVaultUnchanged':True,'automaticLoginUnchanged':True,'uiCaptureHelperOff':True,'viewerCrashRecovery':True,'hostLoginAgentRecovery':True,'tunnelRecovery':True,'physicalRebootTested':False},indent=2))
+(out/'result.json').write_text(json.dumps({'success':True,'version':final['version'],'build':final['build'],'dedicatedDisplay':a.dedicated_display,'fileVaultUnchanged':True,'automaticLoginUnchanged':True,'uiCaptureHelperOff':True,'viewerCrashRecovery':True,'hostLoginAgentRecovery':True,'tunnelRecovery':True,'physicalRebootTested':False},indent=2))
 print('PASS: FileVault and automatic-login settings unchanged; UI capture helper remains off',flush=True)
