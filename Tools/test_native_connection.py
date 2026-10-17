@@ -20,7 +20,7 @@ import time
 p=argparse.ArgumentParser(description=__doc__)
 p.add_argument('--feed',type=Path,required=True);p.add_argument('--socket',type=Path,required=True)
 p.add_argument('--address',required=True);p.add_argument('--user',required=True)
-p.add_argument('--output',type=Path,required=True);p.add_argument('--build',default='53')
+p.add_argument('--output',type=Path,required=True);p.add_argument('--build',default='55')
 a=p.parse_args();a.output.mkdir(parents=True,exist_ok=False)
 control=a.output/'control';control.mkdir(mode=0o700)
 app=Path.home()/'Applications/RetinaLink Host.app'
@@ -54,8 +54,9 @@ def display_ssh_absent():
  output=run(['/bin/ps','-axo','command='],capture_output=True,text=True).stdout
  return not any(x.startswith('/usr/bin/ssh ') and 'Application Support/RetinaLink/display-tunnel' in x for x in output.splitlines())
 def is_native():
- value=viewer()
- return value if value['build']==a.build and value['phase']=='streaming' and value['fullscreen'] and value.get('transport')=='direct-tls' and value.get('requiresRemoteLogin') is False and host()['build']==a.build and display_ssh_absent() else None
+ value=viewer();hd=host()
+ capture_active=any(x['kind']=='host' for x in hd.get('samples',[]))
+ return value if capture_active and value['build']==a.build and value['phase']=='streaming' and value['fullscreen'] and value.get('transport')=='direct-tls' and value.get('requiresRemoteLogin') is False and hd['build']==a.build and display_ssh_absent() else None
 helper_off();before=snapshot();(a.output/'before.json').write_text(json.dumps(before,indent=2)+'\n')
 class Handler(http.server.SimpleHTTPRequestHandler):
  def log_message(self,*args):pass
@@ -71,10 +72,15 @@ try:
   try:os.kill(old,signal.SIGTERM)
   except ProcessLookupError:pass
  wait('old Host exits',lambda:subprocess.run(['/bin/ps','-p',str(old)],stdout=subprocess.DEVNULL).returncode!=0,20)
- run(['/usr/bin/open','-n',app,'--args','--autostart','--test-control-directory',control.resolve(),'--test-update-base-url',base])
- wait('baseline Viewer reconnects',lambda:host()['pid']!=old and viewer()['phase']=='streaming')
+ baseline_time=time.time()
+ host_ui=control/'host-state.json'
+ run(['/usr/bin/open','-n',app,'--args','--autostart','--test-control-directory',control.resolve(),'--test-update-base-url',base,'--ui-state-path',host_ui.resolve()])
+ def baseline_connected():
+  hs=json.loads(host_ui.read_text());vs=viewer()
+  return hs['pid']!=old and hs['streaming'] and hs['time']>=baseline_time and vs['phase']=='streaming' and vs['time']>=baseline_time
+ wait('baseline Viewer completes fresh authenticated handshake',baseline_connected)
  command('updates-test-feed',url=base)
- wait('Viewer configured with local signed feed',lambda:json.loads(remote('cat "$HOME/Library/Logs/RetinaLink/Viewer-updates.json"'))['configured'])
+ wait('Viewer configured with local signed feed',lambda:(u if (u:=json.loads(remote('cat "$HOME/Library/Logs/RetinaLink/Viewer-updates.json"')))['configured'] and u['message']=='Update service is ready.' else None))
  command('updates-install')
  migrated=wait('both updated apps stream directly without an app SSH tunnel',is_native,260)
  (a.output/'migrated-viewer.json').write_text(json.dumps(migrated,indent=2)+'\n')

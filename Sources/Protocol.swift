@@ -261,6 +261,11 @@ func normalizedCode(_ code: String) throws -> String {
 }
 func networkParameters(_ code: String?, preference: Int = 0) throws -> NWParameters {
     let tcp = NWProtocolTCP.Options(); tcp.noDelay = true; tcp.connectionTimeout = 10
+    // An unchanged desktop can leave the stream completely idle. Detect a
+    // half-open connection after Host replacement or network loss instead of
+    // waiting for the next screen update (or the OS's long default timeout).
+    tcp.enableKeepalive = true
+    tcp.keepaliveIdle = 10; tcp.keepaliveInterval = 3; tcp.keepaliveCount = 3
     let tls: NWProtocolTLS.Options?
     if let code = code {
     let normalized = try normalizedCode(code), options = NWProtocolTLS.Options()

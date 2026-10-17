@@ -88,20 +88,20 @@ It tests fullscreen streaming/standby, Host pause/resume, window-close behavior,
 For app-only visual review, `--export-ui /absolute/file.png` renders that app’s own content view; it does not capture the desktop or other applications. Viewer `--standby-only --windowed-viewer` is a bounded preview option when paired with separate `--diagnostics-path` and `--ui-state-path` destinations. Do not leave preview/test options on a production login agent.
 
 
-## Native approval and retained direct transport (0.6.0)
+## Native approval and retained direct transport (0.6.2)
 
 Use an existing owner-authenticated management SSH socket. No password is passed to these scripts, and they do not enable/disable Remote Login. The standard product no longer depends on this testing connection.
 
 ```sh
-python3 Tools/test_native_pairing.py --release work/release-0.6.0-build53 \
+python3 Tools/test_native_pairing.py --release work/release-0.6.2-build55 \
   --address IMAC_IP --user IMAC_USER --socket /absolute/authenticated/control \
   --output work/native-link-test/unique-approval-test
-python3 Tools/test_native_connection.py --feed outputs/native-updates53 \
+python3 Tools/test_native_connection.py --feed outputs/native-updates55 \
   --address IMAC_IP --user IMAC_USER --socket /absolute/authenticated/control \
-  --output work/native-link-test/unique-installed-test --build 53
+  --output work/native-link-test/unique-installed-test --build 55
 ```
 
-The first script launches the actual approval controllers with UUID-isolated preferences and Keychain services. Both local approval actions are required; cancellation and one-sided approval leave the test unpaired. It never opens the production trust service or installs test startup agents. It compares decoded test binding fields because JSON floating-point formatting differs across Foundation releases. It exports only its own app views, not the desktop.
+The first script launches the actual approval controllers with UUID-isolated preferences and Keychain services. Both local approval actions are required; cancellation and one-sided approval leave the test unpaired. It also injects interrupted first enrollment and verifies that approval can resume with the same approved credential. It never opens the production trust service or installs test startup agents. It compares decoded test binding fields because JSON floating-point formatting differs across Foundation releases. It exports only its own app views, not the desktop.
 
 The second script uses already-signed loopback feeds to update the permanently installed apps through Sparkle, verifies binding/public authorized-keys/FileVault/login/power policy are unchanged, confirms direct 5K streaming with no app-owned SSH display master, and tests normal Host startup-agent restart plus Viewer relaunch. It preserves the original-account Viewer's disabled startup preference left by dedicated setup, rather than claiming launchd crash recovery in that account. Its loopback feed forward uses the separate test SSH connection and is removed afterward. Public hosting remains unconfigured.
 

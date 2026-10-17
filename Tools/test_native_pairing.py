@@ -114,6 +114,7 @@ for scenario in ('cancel','approve','resume'):
             hp=plistlib.loads(run(['/usr/bin/defaults','export',hdomain,'-'],capture_output=True).stdout)
             vp=plistlib.loads(run(ssh+['/usr/bin/defaults export '+quote(vdomain)+' -'],capture_output=True).stdout)
             hb=json.loads(hp['trustedDisplayBinding.v1']);vb=json.loads(vp['trustedDisplayBinding.v1'])
+            assert vp.get('nativeHostAddress.v1'),'Authenticated Host address was not cached for discovery-independent reconnect'
             ht=hb.pop('enrolledAt');vt=vb.pop('enrolledAt')
             assert hb==vb and math.isclose(ht,vt,rel_tol=0,abs_tol=.000001),'Binding fields differ'
             assert hs['testCredentialSHA256']==vs['testCredentialSHA256'],'Disposable credential differs'

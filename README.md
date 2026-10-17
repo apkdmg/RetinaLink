@@ -1,6 +1,6 @@
 # RetinaLink
 
-RetinaLink 0.6.0 adds one-time Viewer installation, two-screen Host approval and direct encrypted reconnection. Standard setup no longer requires Remote Login or an iMac account password. Existing pairs reuse their original Keychain credential and binding; FileVault and login settings remain unchanged. Host and Viewer have separate drag-to-Applications installers, and Host also includes an exportable signed Viewer archive.
+RetinaLink 0.6.2 includes one-time Viewer installation, two-screen Host approval and direct encrypted reconnection. Standard setup no longer requires Remote Login or an iMac account password. Existing pairs reuse their original Keychain credential and binding; FileVault and login settings remain unchanged. Host and Viewer have separate drag-to-Applications installers, and Host also includes an exportable signed Viewer archive.
 
 Turn a Retina iMac into an unattended second display. Install Viewer on the iMac once, approve your main Mac, then use Host for everyday controls. Viewer stays fullscreen, shows a quiet standby screen when disconnected, and reconnects without a daily code or click. See [NATIVE_CONNECTION.md](NATIVE_CONNECTION.md) for authentication, migration and test boundaries, and [AUTOMATIC_UPDATES.md](AUTOMATIC_UPDATES.md) for signed updates. Public update hosting remains unconfigured.
 
