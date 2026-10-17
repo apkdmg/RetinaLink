@@ -158,7 +158,8 @@ final class ViewerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
             statsTimer?.invalidate(); statsTimer = timer; RunLoop.main.add(timer,forMode:.common)
             current.onReady = { [weak self,weak current] in
                 guard let current = current else { return }
-                let hello = Hello(version:1,bc7:true,name:Host.current().localizedName ?? "Viewer",maxFramesInFlight:3)
+                FrameTrace.shared.event("viewer_session",fields:["link":current.traceID,"view":display.traceID])
+                let hello = Hello(version:1,bc7:true,name:Host.current().localizedName ?? "Viewer",maxFramesInFlight:3,chunkedPacking:true)
                 if let data = try? JSONEncoder().encode(hello) { current.send(1,data) }
                 DispatchQueue.main.async {
                     guard let self = self, self.link === current else { return }
@@ -186,7 +187,7 @@ final class ViewerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 credits.signal()
                 statistics.completed(timing)
                 guard let current = current else { return }
-                var ack = Data(); ack.put64(timing.sequence); current.send(3,ack)
+                var ack = Data(); ack.put64(timing.sequence); current.send(3,ack,traceSequence:timing.sequence)
             }
             display.onError = { [weak current] text in current?.cancel(reason:text) }
             current.onClose = { [weak self,weak current] reason in
@@ -212,7 +213,7 @@ final class ViewerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
     @objc func copyDiagnostics() {
         let samples = recentDiagnostics.isEmpty ? stats.stringValue : recentDiagnostics.joined(separator:"\n\n")
-        let text = "RetinaLink Viewer \(LaunchOptions.version) (build \(LaunchOptions.build)) · \(ProcessInfo.processInfo.operatingSystemVersionString)\nTransport: 0.2.2 baseline · default priority · whole-message I/O\nGPU: \(display?.device.name ?? "Not connected")\n\(status.stringValue)\nRecent one-second samples, oldest first:\n\(samples)"
+        let text = "RetinaLink Viewer \(LaunchOptions.version) (build \(LaunchOptions.build)) · \(ProcessInfo.processInfo.operatingSystemVersionString)\nTransport: ordered TCP · default priority · whole-message I/O\nGPU: \(display?.device.name ?? "Not connected")\n\(status.stringValue)\nRecent one-second samples, oldest first:\n\(samples)"
         NSPasteboard.general.clearContents(); NSPasteboard.general.setString(text,forType:.string)
     }
     @objc func fullscreen() { displayWindow?.toggleFullScreen(nil) }

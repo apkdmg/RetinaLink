@@ -6,6 +6,14 @@ void putbits(thread uint4 &out, thread uint &pos, uint value, uint count) {
     for (uint j=0;j<count;j++,pos++) out[pos/32] |= ((value>>j)&1u) << (pos%32);
 }
 constant uint weights[16] = {0,4,9,13,17,21,26,30,34,38,43,47,51,55,60,64};
+void markDirty(device atomic_uint *flag) {
+#if STORE_DIRTY_FLAG
+    // Every writer sets this boolean to one; no read/modify/write is needed.
+    atomic_store_explicit(flag,1u,memory_order_relaxed);
+#else
+    atomic_fetch_or_explicit(flag,1u,memory_order_relaxed);
+#endif
+}
 uint blockOutputIndex(uint2 gid, constant Params &p) {
 #if TILE_MAJOR_ENCODER
     uint tileY=gid.y/32, tileX=gid.x/32;
@@ -41,7 +49,7 @@ kernel void encodeBC7(texture2d<float, access::read> src [[texture(0)]],
         putbits(bits,pos,127,7);putbits(bits,pos,127,7);putbits(bits,pos,parity,1);putbits(bits,pos,parity,1);
         // Remaining palette indices are all zero.
         uint index=blockOutputIndex(gid,p);output[index]=bits;
-        if(p.force || any(bits!=previous[index])) atomic_fetch_or_explicit(&dirty[(gid.y/32)*p.columns+(gid.x/32)],1,memory_order_relaxed);
+        if(p.force || any(bits!=previous[index])) markDirty(&dirty[(gid.y/32)*p.columns+(gid.x/32)]);
         return;
     }
 #endif
@@ -76,7 +84,7 @@ kernel void encodeBC7(texture2d<float, access::read> src [[texture(0)]],
     putbits(bits,pos,127,7);putbits(bits,pos,127,7);putbits(bits,pos,parity[0],1);putbits(bits,pos,parity[1],1);
     for(uint i=0;i<16;i++)putbits(bits,pos,indices[i],i==0?3:4);
     uint index=blockOutputIndex(gid,p);output[index]=bits;
-    if(p.force || any(bits!=previous[index])) atomic_fetch_or_explicit(&dirty[(gid.y/32)*p.columns+(gid.x/32)],1,memory_order_relaxed);
+    if(p.force || any(bits!=previous[index])) markDirty(&dirty[(gid.y/32)*p.columns+(gid.x/32)]);
 }
 struct Vertex { float4 position [[position]]; float2 uv; };
 vertex Vertex screenVertex(uint id [[vertex_id]]) {

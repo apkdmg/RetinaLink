@@ -1,23 +1,23 @@
-# RetinaLink 0.2.7
+# RetinaLink 0.2.8
 
 RetinaLink extends a Mac Studio desktop to the native 5120 × 2880 panel of a 2014 5K iMac over an IP network. Host requires Apple silicon and macOS 13+. Viewer includes Intel macOS 10.15+ and Apple silicon macOS 11+ binaries. The tested receiver is Big Sur 11.7.8 with an AMD Radeon R9 M290X.
 
-**0.2.7 reduces capture-side encoding and packing time by about 22% in the final comparison. Sustained 5K60 across the tested desktop workloads has not been achieved.** Final native 5K scrolling runs averaged 51.2 and 53.9 presented fps, versus 49.0 with Host 0.2.6. The moving-card run averaged 58.1; native AppKit window motion averaged 48.9. See `VALIDATION.md` for complete methods and limitations.
+**0.2.8 reduces lossless packet packing from about 4.66 ms to 2.59 ms in the matched scrolling comparison, and total Host encode + pack from 7.93 ms to 6.09 ms. Stable 5K60 across desktop workloads remains unresolved.** See `VALIDATION.md` for sustained tests and the isolated capture/acknowledgement paths.
 
-## Changes in 0.2.7 build 16
+## Changes in 0.2.8 build 22
 
-- The GPU writes compressed blocks in tile order. Host gathers each changed tile with one contiguous copy, reducing measured tile gathering from about 1.7 ms to 0.6 ms per fullscreen scrolling frame.
-- Frame packing reuses raw, compressed and LZ4 scratch buffers. Returned network packets own their bytes. Measured packet packing fell from about 6.0 ms to 4.6 ms.
-- The native 60 Hz virtual display supplies the capture clock without a second 1/60 throttle. Target-30 profiles retain their explicit throttle. Capture dimensions and resolution checks remain in place.
-- The ScreenCaptureKit surface pool increases from three to five. The capture mailbox continues to retain only the newest waiting image; encoded deltas remain ordered and the negotiated in-flight limit remains three.
-- Host requests latency-critical activity while streaming. Both endpoints prevent idle display sleep during a connected stream and release their activity on stop. Manual locking and sleeping remain available.
-- Automatic diagnostics now separate capture status/timestamp gaps, GPU work, GPU submission/waiting, tile gathering and packet packing.
+- Large frames use four independent lossless LZ4 chunks, packed and unpacked in parallel. Viewer advertises this capability; older Viewers retain the original format. Small frames retain serial packing.
+- Every BC7 tile byte survives the new format exactly. Tests cover all supported resolutions, retained packets, raw/incompressible and mixed chunks, malformed lengths and decoder rejection.
+- Viewer completion/presentation callbacks retain frame identity instead of whole decoded 5K buffers after staging upload.
+- The GPU sets its dirty-tile boolean directly rather than performing an unnecessary read/modify/write. Static suppression and changed-tile contents are checked against the previous encoder. This change has no isolated FPS-gain claim.
+- Automatic one-second diagnostics now include worst acknowledgement/send delays, body-assembly maxima, GPU start delay, callback delay and presentation-call timing. Brief stalls are no longer hidden in averages.
+- Optional bounded frame traces match capture, packing, transfer, decoding, GPU work, presentation and ACK sequence numbers. Production tracing is disabled by default. `Tools/` provides SSH deployment, controlled scenes and trace analysis.
 
-The compressed image bytes, native resolution, BC7 quality algorithm, encrypted pairing and Viewer rendering path are preserved. Row-major/tile-major equality is tested at 1440p, 4K and 5K, including partial bottom tiles. Reusable packing is compared with the original packets and checked for output retention across scratch-buffer reuse.
+The native capture clock, five-surface ScreenCaptureKit pool, bounded latest-frame mailbox and negotiated three-frame transport limit from 0.2.7 remain. BC7 tile bytes, native resolution, encrypted pairing and the default vsynced rendering policy are preserved. The presentation-pacing experiment did not establish an improvement and is excluded from this release.
 
 ## Use on these two Macs
 
-The installed iMac Viewer is `~/Applications/RetinaLink-0.2.7/RetinaLink Viewer.app`. The Studio Host is in the supplied `RetinaLink-0.2.7` folder. Use **RetinaLink SSH Tunnel.command** from the parent outputs folder to start the tunnel and apps. It reuses the existing SSH session when available. If SSH needs a password, enter it locally in Terminal.
+The installed iMac Viewer is `~/Applications/RetinaLink-0.2.8/RetinaLink Viewer.app`. The Studio Host is in the supplied `RetinaLink-0.2.8` folder. Use **RetinaLink SSH Tunnel.command** from the parent outputs folder to start the tunnel and apps. It reuses the existing SSH session when available. If SSH needs a password, enter it locally in Terminal.
 
 The current tunnel connects the iMac's `127.0.0.1:58473` to the Studio Host. Viewer uses **127.0.0.1** and **Automatic** networking, with the existing five-digit code. The app's “Local test” path label describes the tunnel entrance; traffic still crosses the Ethernet LAN. The tunnel is a workaround for the measured direct transport slowdown on this setup, not a claim that every network needs SSH.
 
@@ -36,6 +36,8 @@ Pairing modes are a saved five-digit code, a per-launch long random code, and ex
 ## Diagnostics and remote testing
 
 Timing snapshots are saved automatically in `~/Library/Logs/RetinaLink/Host.json` and `Viewer.json` on their respective Macs. They contain at most 120 records, with restricted file permissions. They contain no screen images or pairing codes. `--diagnostics-path /absolute/file.json` selects an alternate location. During development, the Studio uses the workspace's `work/host-live.json`.
+
+`--trace-path /absolute/file.jsonl` enables a separate metadata trace, capped at 250,000 events and written in batches. It contains no screen images, pairing codes, packet payloads or window titles. Leave it off for ordinary use. See `Tools/README.md` for automated tests.
 
 An SSH reader can fetch these logs without UI automation or clipboard copying. Copy diagnostics remains available for convenience. Useful launch options are `--autostart` for Host and `--autoconnect --fullscreen` for Viewer. Existing saved pairing settings are reused.
 

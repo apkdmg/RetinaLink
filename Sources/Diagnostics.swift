@@ -1,4 +1,5 @@
 import Foundation
+import QuartzCore
 
 enum LaunchOptions {
     static func has(_ flag: String) -> Bool { CommandLine.arguments.contains(flag) }
@@ -6,8 +7,49 @@ enum LaunchOptions {
         guard let i = CommandLine.arguments.firstIndex(of: flag), i + 1 < CommandLine.arguments.count else { return nil }
         return CommandLine.arguments[i + 1]
     }
-    static let version = "0.2.7"
+    static let version = "0.2.8"
     static let build = Bundle.main.object(forInfoDictionaryKey:"CFBundleVersion") as? String ?? "development"
+}
+
+// Opt-in metadata trace. Batches are written once per second off all hot queues.
+// No pixels, credentials, addresses, window titles or packet contents are saved.
+final class FrameTrace {
+    static let shared = FrameTrace()
+    let enabled: Bool
+    private let queue = DispatchQueue(label:"retinalink.trace",qos:.utility)
+    private var file: FileHandle?, timer: DispatchSourceTimer?
+    private var pending: [[String:Any]] = [], count = 0
+    private let limit = 250_000
+    init() {
+        guard let path = LaunchOptions.value("--trace-path") else {enabled=false;return}
+        do {
+            let url=URL(fileURLWithPath:path)
+            try FileManager.default.createDirectory(at:url.deletingLastPathComponent(),withIntermediateDirectories:true,attributes:[.posixPermissions:0o700])
+            FileManager.default.createFile(atPath:path,contents:nil,attributes:[.posixPermissions:0o600])
+            file=try FileHandle(forWritingTo:url);file?.truncateFile(atOffset:0)
+            enabled=true
+            let timer=DispatchSource.makeTimerSource(queue:queue)
+            timer.schedule(deadline:.now()+1,repeating:1)
+            timer.setEventHandler {[weak self] in self?.flush()};self.timer=timer;timer.resume()
+        } catch {enabled=false;fputs("RetinaLink trace unavailable: \(error)\n",stderr);return}
+        event("trace_start",fields:["version":LaunchOptions.version,"build":LaunchOptions.build,"pid":ProcessInfo.processInfo.processIdentifier])
+    }
+    func event(_ name:String,sequence:UInt64?=nil,fields:@autoclosure ()->[String:Any]=[:]) {
+        guard enabled else{return}
+        var item=fields()
+        for (key,value) in item {if let number=value as? Double,!number.isFinite {item[key]=NSNull()}}
+        item["event"]=name;item["t"]=CACurrentMediaTime();item["wall"]=Date().timeIntervalSince1970
+        if let sequence=sequence {item["seq"]=sequence}
+        queue.async {[self] in
+            guard count<limit else{return};count += 1;pending.append(item)
+            if count==limit {pending.append(["event":"trace_limit","t":CACurrentMediaTime()]);flush()}
+        }
+    }
+    private func flush() {
+        guard !pending.isEmpty,let file=file else{return}
+        if var bytes=try? JSONSerialization.data(withJSONObject:pending,options:[.sortedKeys]) {bytes.append(10);file.write(bytes)}
+        pending.removeAll(keepingCapacity:true)
+    }
 }
 
 // Timing/state only: no pairing credentials, screen pixels, window titles or addresses.

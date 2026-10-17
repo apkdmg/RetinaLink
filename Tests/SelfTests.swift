@@ -19,7 +19,8 @@ func pump(until condition: () -> Bool, timeout: Double = 10) throws {
 func runSelfTests() throws {
     let legacy = try JSONDecoder().decode(Hello.self,from:Data("{\"version\":1,\"bc7\":true,\"name\":\"legacy\"}".utf8))
     try check(try legacy.frameLimit()==2,"Legacy Viewer must retain two credits")
-    let modern = Hello(version:1,bc7:true,name:"new",maxFramesInFlight:3)
+    let modern = Hello(version:1,bc7:true,name:"new",maxFramesInFlight:3,chunkedPacking:true)
+    try check(legacy.chunkedPacking == nil,"Legacy peer must not negotiate chunked compression")
     try check(try modern.frameLimit()==3 && modern.frameLimit(requested:2)==2,"Negotiated frame credits")
     try check(try Hello(version:1,bc7:true,name:"future",maxFramesInFlight:1000).frameLimit()==3,"Frame credits must remain bounded")
     try check(try Hello(version:1,bc7:true,name:"single",maxFramesInFlight:1).frameLimit()==1,"Receiver capacity must be respected")
@@ -35,6 +36,18 @@ func runSelfTests() throws {
     let resumed = rate.take(now:3)
     try check(moving.fps == 60 && moving.mbps == 8 && idle.fps == 0 && idle.mbps == 0 && resumed.fps == 60,"Idle time contaminated the next measurement window")
     print("PASS: active, idle and resumed one-second counter windows")
+    let statistics=ViewerStatistics()
+    func measured(_ delay:Double)->RenderTiming {
+        RenderTiming(sequence:1,width:5120,height:2880,queueMS:0,unpackMS:1,uploadMS:1,drawableMS:0,gpuMS:4,totalMS:delay+6,submissionMS:delay,callbackMS:0.1,presentMS:0.02)
+    }
+    statistics.completed(measured(1));statistics.completed(measured(99))
+    statistics.receivedBody(in:2);statistics.receivedBody(in:80)
+    let burst=statistics.report()
+    try check(burst.contains("GPU start delay 50.00 ms · max 99.00 ms") && burst.contains("assembly 41.0 ms · max 80.0 ms"),"Brief stalls were hidden by average timings")
+    statistics.completed(measured(1));statistics.receivedBody(in:2)
+    let reset=statistics.report()
+    try check(reset.contains("GPU start delay 1.00 ms · max 1.00 ms") && reset.contains("assembly 2.0 ms · max 2.0 ms"),"Worst-case timing counters did not reset")
+    print("PASS: short stall maxima, independent stage averages and per-interval reset")
     try runPairingTests()
     let bytes = Data(repeating:0x40,count:128*128)
     let frame = Frame(sequence:7,width:2560,height:1440,keyframe:false,tiles:[TileUpdate(id:0,bytes:bytes)])
@@ -50,6 +63,7 @@ func runSelfTests() throws {
     }
     try check(retainedPackets==expectedPackets && reusablePacket==packed,"Reusable packer overwrote retained packets or changed encoding")
     print("PASS: reusable packing matches baseline packets and retains independent output across scratch-buffer reuse")
+    try testChunkedPacking()
     try check(decoded.sequence == 7 && decoded.tiles[0].bytes == bytes,"Frame round trip")
     let padded = Data([0xFF]) + packed
     for copy in [false,true] {
@@ -80,6 +94,60 @@ func runSelfTests() throws {
     if let device = MTLCreateSystemDefaultDevice() { print("GPU: \(device.name); BC textures: \(supportsBC(device))") }
     #endif
     print("ALL SELF-TESTS PASSED")
+}
+
+func testChunkedPacking() throws {
+    let packer = FramePacker()
+    var retained:[Data] = [], expected:[Frame] = []
+    for (w,h) in [(2560,1440),(3840,2160),(5120,2880)] {
+        let total=((w+127)/128)*((h+127)/128)
+        let tiles=(0..<total).map { id -> TileUpdate in
+            let d=Frame.dimensions(id,w,h)
+            return TileUpdate(id:id,bytes:Data((0..<(d.w*d.h)).map {UInt8(truncatingIfNeeded:($0/7) ^ id)}))
+        }
+        let frame=Frame(sequence:UInt64(w),width:w,height:h,keyframe:true,tiles:tiles)
+        let packet=try packer.serialize(frame,parallel:true)
+        try check(packet.first==2,"Compressible frame did not exercise chunked packing")
+        retained.append(packet);expected.append(frame)
+    }
+    for (packet,frame) in zip(retained,expected) {
+        for copy in [false,true] {
+            let decoded=try Frame.parse((Data([0xFF])+packet).dropFirst(),copyBuffers:copy)
+            try check(decoded.sequence==frame.sequence && decoded.width==frame.width && decoded.height==frame.height && decoded.keyframe,"Chunked frame identity changed")
+            try check(decoded.tiles.count==frame.tiles.count && zip(decoded.tiles,frame.tiles).allSatisfy {$0.id==$1.id && $0.bytes==$1.bytes},"Chunked packing changed tile bytes or retained packet storage")
+        }
+    }
+    // Unique pseudorandom bytes exercise uncompressed chunks and whole-frame fallback.
+    var state:UInt64=0x1234567890abcdef
+    func noise(_ n:Int)->Data {
+        var bytes=Data(count:n)
+        bytes.withUnsafeMutableBytes { (p:UnsafeMutableRawBufferPointer) in
+            for i in stride(from:0,to:n,by:8) {state ^= state<<13;state ^= state>>7;state ^= state<<17;p.storeBytes(of:state,toByteOffset:i,as:UInt64.self)}
+        }
+        return bytes
+    }
+    for mixed in [false,true] {
+        let tiles=(0..<80).map {TileUpdate(id:$0,bytes:mixed && $0<40 ? Data(repeating:0x40,count:16384):noise(16384))}
+        let frame=Frame(sequence:mixed ? 2:1,width:2560,height:1440,keyframe:false,tiles:tiles)
+        let packet=try packer.serialize(frame,parallel:true), decoded=try Frame.parse(packet)
+        try check(packet.first==(mixed ? 2:0),"Compression fallback was not exercised")
+        try check(zip(decoded.tiles,tiles).allSatisfy {$0.id==$1.id && $0.bytes==$1.bytes},"Raw or mixed compression chunks changed bytes")
+    }
+    func envelope(_ payload:Data,_ count:UInt32=24)->Data {
+        var d=Data([2]);d.put32(count);d.put32(UInt32(payload.count));d.append(payload);return d
+    }
+    for n in [UInt32(0),1,5,UInt32.max] {var d=Data();d.put32(n);try expectInvalid {_ = try Frame.parse(envelope(d))}}
+    let invalidSizes:[(UInt32,UInt32)] = [(0,0),(25,1),(12,13),(12,0),(UInt32.max,1)]
+    for (raw,stored) in invalidSizes {
+        var d=Data();d.put32(2);d.put32(raw);d.put32(stored);d.append(0)
+        try expectInvalid {_ = try Frame.parse(envelope(d))}
+    }
+    let packet=retained[2]
+    for n in [9,12,20,packet.count-1] {try expectInvalid {_ = try Frame.parse(packet.prefix(n))}}
+    var invalidLZ4=Data();invalidLZ4.put32(2)
+    for _ in 0..<2 {invalidLZ4.put32(12);invalidLZ4.put32(1);invalidLZ4.append(0)}
+    try expectInvalid {_ = try Frame.parse(envelope(invalidLZ4))}
+    print("PASS: parallel lossless packing preserves every tile at 1440p/4K/5K, owned output, raw/mixed chunks, legacy negotiation and malformed-input rejection")
 }
 
 func runPairingTests() throws {
@@ -370,11 +438,16 @@ func testCaptureMailbox() throws {
     let counts=mailbox.counts(); try check(counts.complete==2 && counts.replaced==1,"Incorrect coalescing counters")
     try check(mailbox.offer(first!),"Mailbox failed to reschedule after draining")
     mailbox.stop(); try check(mailbox.take()==nil && !mailbox.offer(second!),"Stopped mailbox accepted a frame")
+    mailbox.start();try check(mailbox.offer(first!,id:41,displayTime:1.25),"Trace input failed to schedule")
+    try check(!mailbox.offer(second!,id:42,displayTime:1.5),"Trace input scheduled duplicate work")
+    let input=mailbox.takeInput()
+    try check(input?.image === second! && input?.id==42 && input?.displayTime==1.5,"Coalescing lost capture identity/time")
+    mailbox.stop()
     print("PASS: bounded latest-frame mailbox, coalescing, scheduling and stop cleanup")
 }
 
 func testFlatBlockFastPath() throws {
-    let fast = try TextureEncoder(baseline:false), baseline = try TextureEncoder(baseline:true)
+    let fast = try TextureEncoder(baseline:false), baseline = try TextureEncoder(baseline:true,atomicStore:false)
     let w=2560, h=1440
     var image: CVPixelBuffer?
     let attrs: [String:Any] = [kCVPixelBufferMetalCompatibilityKey as String:true,kCVPixelBufferIOSurfacePropertiesKey as String:[:]]

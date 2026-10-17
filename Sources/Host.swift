@@ -47,16 +47,20 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
     let mailbox = CaptureMailbox()
     let captureTiming = CaptureTiming()
     let captureOnly = LaunchOptions.has("--capture-only")
+    let encodeOnly = LaunchOptions.has("--encode-only")
+    var captureID:UInt64 = 0
     let inlineCapture = LaunchOptions.has("--inline-capture")
     let link: Link, encoder: TextureEncoder
     let packer: FramePacker? = LaunchOptions.has("--baseline-packing") ? nil:FramePacker()
     var stream: SCStream?, virtual: RLVirtualDisplay?
     var inFlight: [UInt64:Double] = [:], sequence: UInt64 = 0
     var frameLimit = 2
+    var parallelPacking = false
     var sentBytes = 0, delivered = 0, skipped = 0, lastStats = ProcessInfo.processInfo.systemUptime
     var complete = 0, unchanged = 0, inactive = 0, encodes = 0
     var ackMS = 0.0, encodeMS = 0.0, active = false
     var sendMS = 0.0, sendCount = 0, ackDispatchMS = 0.0
+    var maxACK=0.0, maxSend=0.0, maxACKDispatch=0.0
     var gpuMS = 0.0, gpuWaitMS = 0.0, gatherMS = 0.0, packMS = 0.0
     var watchdog: DispatchSourceTimer?
     var activity: StreamingActivity?
@@ -91,7 +95,7 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
         config.pixelFormat = kCVPixelFormatType_32BGRA; config.showsCursor = !LaunchOptions.has("--capture-no-cursor")
         if !LaunchOptions.has("--capture-native-colour") { config.colorSpaceName = CGColorSpace.sRGB }
         if #available(macOS 14.0, *) { config.captureResolution = .best }
-        DiagnosticLog.shared.record("capture-config", "BGRA \(width) × \(height); depth \(config.queueDepth); interval \(config.minimumFrameInterval.seconds); capture-only \(captureOnly); native-colour \(LaunchOptions.has("--capture-native-colour"))")
+        DiagnosticLog.shared.record("capture-config", "BGRA \(width) × \(height); depth \(config.queueDepth); interval \(config.minimumFrameInterval.seconds); capture-only \(captureOnly); encode-only \(encodeOnly); parallel lossless packing \(parallelPacking); native-colour \(LaunchOptions.has("--capture-native-colour"))")
         var displayIDs = [CGDirectDisplayID](repeating:0,count:32), count:UInt32 = 0
         if CGGetActiveDisplayList(32,&displayIDs,&count) == .success {
             for id in displayIDs.prefix(Int(count)) {
@@ -127,13 +131,17 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
     }
     func acknowledge(_ data: Data) {
         let received = ProcessInfo.processInfo.systemUptime
+        FrameTrace.shared.event("ack_dispatch",fields:["bytes":data.count])
         work.async { [weak self] in
             guard let self = self, self.active else { return }
             do {
                 var reader = Reader(data:data); let seq = try reader.u64()
                 guard reader.atEnd, let time = self.inFlight.removeValue(forKey:seq) else { throw LinkError.invalid("Invalid frame acknowledgement") }
+                FrameTrace.shared.event("ack_apply",sequence:seq,fields:["cycle_ms":(ProcessInfo.processInfo.systemUptime-time)*1000,"dispatch_ms":(ProcessInfo.processInfo.systemUptime-received)*1000])
                 self.ackMS += (ProcessInfo.processInfo.systemUptime-time)*1000; self.delivered += 1
                 self.ackDispatchMS += (ProcessInfo.processInfo.systemUptime-received)*1000
+                self.maxACK=max(self.maxACK,(ProcessInfo.processInfo.systemUptime-time)*1000)
+                self.maxACKDispatch=max(self.maxACKDispatch,(ProcessInfo.processInfo.systemUptime-received)*1000)
             } catch { self.fail(String(describing:error)) }
         }
     }
@@ -141,6 +149,7 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
         work.async { [weak self] in
             guard let self = self, self.active else { return }
             self.sendMS += milliseconds; self.sendCount += 1
+            self.maxSend=max(self.maxSend,milliseconds)
         }
     }
     func stream(_ stream: SCStream,didOutputSampleBuffer sampleBuffer: CMSampleBuffer,of type: SCStreamOutputType) {
@@ -148,6 +157,10 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
             guard type == .screen, sampleBuffer.isValid else { return }
             let info = (CMSampleBufferGetSampleAttachmentsArray(sampleBuffer,createIfNecessary:false) as? [[SCStreamFrameInfo:Any]])?.first
             let state = info?[.status] as? Int ?? 6
+            captureID += 1
+            let ticks=(info?[.displayTime] as? NSNumber)?.uint64Value
+            let displayTime=ticks.map {CMClockMakeHostTimeFromSystemUnits($0).seconds}
+            FrameTrace.shared.event("capture",fields:["id":captureID,"status":state,"display":displayTime ?? -1,"pts":sampleBuffer.presentationTimeStamp.seconds,"image":sampleBuffer.imageBuffer != nil])
             captureTiming.record(status:state,displayTime:(info?[.displayTime] as? NSNumber)?.uint64Value)
             if captureOnly { return }
             if inlineCapture { process(sampleBuffer, type:type); return }
@@ -155,13 +168,13 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
             guard let attachments = CMSampleBufferGetSampleAttachmentsArray(sampleBuffer,createIfNecessary:false) as? [[SCStreamFrameInfo:Any]],
                   let status=attachments.first?[.status] as? Int, status==SCFrameStatus.complete.rawValue,
                   let image=sampleBuffer.imageBuffer else { mailbox.idle(); return }
-            if mailbox.offer(image) { work.async { [weak self] in self?.drainCapture() } }
+            if mailbox.offer(image,id:captureID,displayTime:displayTime) { work.async { [weak self] in self?.drainCapture() } }
         }
     }
     private func drainCapture() {
         guard active else { mailbox.stop(); return }
-        guard let image = mailbox.take() else { return }
-        autoreleasepool { encode(image) }
+        guard let input = mailbox.takeInput() else { return }
+        autoreleasepool { encode(input.image,captureID:input.id) }
         // Yield between frames so acknowledgements and the watchdog cannot starve.
         work.async { [weak self] in self?.drainCapture() }
     }
@@ -173,16 +186,20 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
         guard let pixel = sampleBuffer.imageBuffer else { return }
         encode(pixel)
     }
-    private func encode(_ pixel: CVPixelBuffer) {
-        guard inFlight.count < frameLimit else { skipped += 1; return }
+    private func encode(_ pixel: CVPixelBuffer,captureID:UInt64=0) {
+        guard inFlight.count < frameLimit else { skipped += 1;FrameTrace.shared.event("capture_backpressure",fields:["id":captureID]);return }
         do {
             let start = ProcessInfo.processInfo.systemUptime
-            guard let frame = try encoder.encode(pixel,sequence:sequence+1,force:sequence == 0) else { unchanged += 1; return }
+            FrameTrace.shared.event("encode_begin",sequence:sequence+1,fields:["capture_id":captureID])
+            guard let frame = try encoder.encode(pixel,sequence:sequence+1,force:sequence == 0) else { unchanged += 1;FrameTrace.shared.event("encode_unchanged",fields:["capture_id":captureID]);return }
+            FrameTrace.shared.event("encode_end",sequence:frame.sequence,fields:["gpu_ms":encoder.lastGPUms,"wait_ms":encoder.lastWaitMS,"gather_ms":encoder.lastGatherMS,"tiles":frame.tiles.count])
             let packStart = ProcessInfo.processInfo.systemUptime
-            let packet = try packer?.serialize(frame) ?? frame.serialize(); encodeMS += (ProcessInfo.processInfo.systemUptime-start)*1000; encodes += 1
+            let packet = try packer?.serialize(frame,parallel:parallelPacking) ?? frame.serialize(); encodeMS += (ProcessInfo.processInfo.systemUptime-start)*1000; encodes += 1
             gpuMS += encoder.lastGPUms; gpuWaitMS += encoder.lastWaitMS; gatherMS += encoder.lastGatherMS; packMS += (ProcessInfo.processInfo.systemUptime-packStart)*1000
+            if encodeOnly {sequence += 1;FrameTrace.shared.event("discarded",sequence:sequence,fields:["bytes":packet.count]);return}
             sequence += 1; inFlight[sequence] = ProcessInfo.processInfo.systemUptime; sentBytes += packet.count
-            link.send(2,packet)
+            FrameTrace.shared.event("packed",sequence:sequence,fields:["bytes":packet.count,"encoding":packet.first ?? 0])
+            link.send(2,packet,traceSequence:sequence)
         } catch { fail(String(describing:error)) }
     }
     func stream(_ stream: SCStream,didStopWithError error: Error) { work.async { self.fail(String(describing:error)) } }
@@ -196,10 +213,12 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
         guard elapsed > 0 else { return }
         let timings = encodes == 0 && delivered == 0 ? "Idle — no sent or acknowledged frames in this interval." : String(format:"Average encode + pack %.1f ms · acknowledgement %.1f ms",encodeMS/Double(max(1,encodes)),ackMS/Double(max(1,delivered)))
         let transport = String(format:"\nSend queue + transport processing %.1f ms · ACK dispatch %.1f ms · coalesced %d",sendMS/Double(max(1,sendCount)),ackDispatchMS/Double(max(1,delivered)),input.replaced) + "\n" + timing.text + String(format:"\nEncoder GPU %.2f ms · GPU submit/wait %.2f ms · tile gather %.2f ms · packet pack %.2f ms",gpuMS/Double(max(1,encodes)),gpuWaitMS/Double(max(1,encodes)),gatherMS/Double(max(1,encodes)),packMS/Double(max(1,encodes)))
-        onStatus?(String(format:"%.1f delivered updates/s · %.1f Mbps · %d/%d frames in flight\nCapture %.1f/s · unchanged %d · backpressure skips %d · inactive %d\n",Double(delivered)/elapsed,Double(sentBytes)*8/elapsed/1e6,inFlight.count,frameLimit,Double(complete)/elapsed,unchanged,skipped,inactive) + timings + transport)
+        let tails=String(format:"\nWorst ms: acknowledgement %.1f · send processing %.1f · ACK dispatch %.1f",maxACK,maxSend,maxACKDispatch)
+        onStatus?(String(format:"%.1f delivered updates/s · %.1f Mbps · %d/%d frames in flight\nCapture %.1f/s · unchanged %d · backpressure skips %d · inactive %d\n",Double(delivered)/elapsed,Double(sentBytes)*8/elapsed/1e6,inFlight.count,frameLimit,Double(complete)/elapsed,unchanged,skipped,inactive) + timings + transport + tails)
         delivered = 0; sentBytes = 0; skipped = 0; lastStats = now
         complete = 0; unchanged = 0; inactive = 0; encodes = 0; encodeMS = 0; ackMS = 0
         sendMS = 0; sendCount = 0; ackDispatchMS = 0
+        maxACK=0;maxSend=0;maxACKDispatch=0
         gpuMS = 0; gpuWaitMS = 0; gatherMS = 0; packMS = 0
     }
 }
@@ -208,6 +227,7 @@ final class HostApp: NSObject, NSApplicationDelegate {
     var window: NSWindow!, listener: NWListener?, link: Link?, capture: CaptureSession?
     var startup: Task<Void,Never>?, helloReceived = false, stopping = false
     var frameLimit = 2
+    var parallelPacking = false
     var startingCapture = false, waitingForPermission = false
     var makeCapture: (Link) throws -> CaptureSession = { try CaptureSession(link:$0) }
     let profiles = NSPopUpButton()
@@ -325,6 +345,7 @@ final class HostApp: NSObject, NSApplicationDelegate {
                         let hello = try JSONDecoder().decode(Hello.self,from:data)
                         guard hello.version == 1, hello.bc7 else { throw LinkError.invalid("Viewer does not support this protocol or GPU format") }
                         self.frameLimit = try hello.frameLimit(requested:Int(LaunchOptions.value("--frames-in-flight") ?? "3") ?? 3)
+                        self.parallelPacking = hello.chunkedPacking == true && !LaunchOptions.has("--serial-packing")
                         self.helloReceived = true; self.beginCapture(peer)
                     } catch { self.stop(message:String(describing:error)) }
                 } else if type == 3, self.helloReceived { self.capture?.acknowledge(data) }
@@ -351,6 +372,7 @@ final class HostApp: NSObject, NSApplicationDelegate {
             do {
                 let session = try self.makeCapture(peer); self.capture = session
                 session.frameLimit = self.frameLimit
+                session.parallelPacking = self.parallelPacking
                 attemptedSession = session
                 peer.setAcknowledgementHandler { [weak session] data in session?.acknowledge(data) }
                 peer.setSendTimingHandler { [weak session] type, milliseconds in

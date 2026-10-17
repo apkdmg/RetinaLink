@@ -38,6 +38,7 @@ struct Hello: Codable {
     let bc7: Bool
     let name: String
     var maxFramesInFlight: Int? = nil
+    var chunkedPacking: Bool? = nil
     func frameLimit(requested: Int = 3) throws -> Int {
         // Missing capability means an older Viewer with the original two credits.
         let capacity = maxFramesInFlight ?? 2
@@ -79,12 +80,41 @@ struct Frame {
     static func parse(_ packet: Data, copyBuffers: Bool = LaunchOptions.has("--copy-frame-buffers")) throws -> Frame {
         var outer = Reader(data: packet)
         let encoding = try outer.bytes(1)[0], count = Int(try outer.u32()), encodedCount = Int(try outer.u32())
-        guard count >= 24, count <= maxPacket, encoding <= 1 else { throw LinkError.invalid("Invalid frame envelope") }
+        guard count >= 24, count <= maxPacket, encoding <= 2 else { throw LinkError.invalid("Invalid frame envelope") }
         guard encodedCount == packet.count-outer.offset else { throw LinkError.invalid("Truncated encoded frame") }
         let payload = try copyBuffers ? outer.bytes(packet.count - outer.offset) : outer.sliceBytes(packet.count - outer.offset)
         guard !payload.isEmpty else { throw LinkError.invalid("Missing frame payload") }
         let raw: Data
-        if encoding == 1 {
+        if encoding == 2 {
+            // Validate every range before parallel workers touch disjoint output spans.
+            var chunks = Reader(data:payload)
+            let n = Int(try chunks.u32())
+            guard (2...4).contains(n) else {throw LinkError.invalid("Invalid compression chunk count")}
+            var spans:[(Data,Int,Int)] = [], offset = 0
+            for _ in 0..<n {
+                let decoded = Int(try chunks.u32()), stored = Int(try chunks.u32())
+                guard decoded > 0, decoded <= count-offset, stored > 0, stored <= decoded else {throw LinkError.invalid("Invalid compression chunk size")}
+                spans.append((try chunks.sliceBytes(stored),offset,decoded));offset += decoded
+            }
+            guard offset == count, chunks.atEnd else {throw LinkError.invalid("Invalid compression chunk envelope")}
+            var decoded = Data(count:count)
+            let sizes = UnsafeMutablePointer<Int>.allocate(capacity:n)
+            sizes.initialize(repeating:0,count:n)
+            defer {sizes.deinitialize(count:n);sizes.deallocate()}
+            decoded.withUnsafeMutableBytes { (dst:UnsafeMutableRawBufferPointer) in
+                DispatchQueue.concurrentPerform(iterations:n) { i in
+                    let (bytes,offset,length) = spans[i]
+                    sizes[i] = bytes.withUnsafeBytes { (src:UnsafeRawBufferPointer) in
+                        if bytes.count == length {
+                            memcpy(dst.baseAddress!.advanced(by:offset),src.baseAddress!,length);return length
+                        }
+                        return compression_decode_buffer(dst.baseAddress!.advanced(by:offset).assumingMemoryBound(to:UInt8.self),length,src.bindMemory(to:UInt8.self).baseAddress!,bytes.count,nil,COMPRESSION_LZ4)
+                    }
+                }
+            }
+            guard spans.indices.allSatisfy({sizes[$0] == spans[$0].2}) else {throw LinkError.invalid("Invalid compressed chunk")}
+            raw = decoded
+        } else if encoding == 1 {
             if copyBuffers {
                 var decoded = [UInt8](repeating:0,count:count)
                 let size = payload.withUnsafeBytes { src in
@@ -123,11 +153,18 @@ struct Frame {
 // Confined to Host's serial encoder queue. Returned packets own their bytes;
 // neither packet nor tile views can reference these reusable scratch buffers.
 final class FramePacker {
+    private final class Worker {
+        let packed = UnsafeMutableRawPointer.allocate(byteCount:maxPacket/4+1024,alignment:16)
+        let scratch = UnsafeMutableRawPointer.allocate(byteCount:max(1,compression_encode_scratch_buffer_size(COMPRESSION_LZ4)),alignment:16)
+        var size = 0
+        deinit {packed.deallocate();scratch.deallocate()}
+    }
     private let raw = UnsafeMutableRawPointer.allocate(byteCount:maxPacket,alignment:16)
     private let packed = UnsafeMutableRawPointer.allocate(byteCount:maxPacket+1024,alignment:16)
     private let scratch = UnsafeMutableRawPointer.allocate(byteCount:max(1,compression_encode_scratch_buffer_size(COMPRESSION_LZ4)),alignment:16)
+    private var workers:[Worker] = []
     deinit { raw.deallocate(); packed.deallocate(); scratch.deallocate() }
-    func serialize(_ frame: Frame) throws -> Data {
+    func serialize(_ frame: Frame, parallel:Bool=false) throws -> Data {
         var count = 24
         for tile in frame.tiles {
             guard tile.bytes.count <= maxPacket-count-4 else {throw LinkError.invalid("Frame packing capacity exceeded")}
@@ -141,6 +178,26 @@ final class FramePacker {
             put32(UInt32(tile.id))
             tile.bytes.withUnsafeBytes { bytes in if bytes.count > 0 {_ = memcpy(raw.advanced(by:offset),bytes.baseAddress!,bytes.count)} }
             offset += tile.bytes.count
+        }
+        if parallel, count >= 1024*1024 {
+            if workers.isEmpty {workers = (0..<4).map {_ in Worker()}}
+            let stride = (count+3)/4
+            DispatchQueue.concurrentPerform(iterations:4) { i in
+                let worker = self.workers[i], start = i*stride, length = min(stride,count-start)
+                worker.size = compression_encode_buffer(worker.packed.assumingMemoryBound(to:UInt8.self),maxPacket/4+1024,self.raw.advanced(by:start).assumingMemoryBound(to:UInt8.self),length,worker.scratch,COMPRESSION_LZ4)
+            }
+            var body = Data();body.put32(4)
+            for i in 0..<4 {
+                let worker=workers[i], start=i*stride, length=min(stride,count-start)
+                let compressed=worker.size>0 && worker.size<length, stored=compressed ? worker.size:length
+                body.put32(UInt32(length));body.put32(UInt32(stored))
+                body.append((compressed ? worker.packed:raw.advanced(by:start)).assumingMemoryBound(to:UInt8.self),count:stored)
+            }
+            // Rare incompressible frames still use the original raw envelope.
+            var result = Data([body.count < count ? 2:0]);result.reserveCapacity(9+min(body.count,count))
+            result.put32(UInt32(count));result.put32(UInt32(min(body.count,count)))
+            if body.count < count {result.append(body)} else {result.append(raw.assumingMemoryBound(to:UInt8.self),count:count)}
+            return result
         }
         let n = compression_encode_buffer(packed.assumingMemoryBound(to:UInt8.self),maxPacket+1024,raw.assumingMemoryBound(to:UInt8.self),count,scratch,COMPRESSION_LZ4)
         let compressed = n > 0 && n < count, payload = compressed ? n:count
@@ -232,6 +289,8 @@ final class Link {
     private var acknowledgementHandler: ((Data) -> Void)?
     private var sendTimingHandler: ((UInt8,Double) -> Void)?
     var onReceiveTiming: ((UInt8,Double) -> Void)?
+    let traceID=UUID().uuidString
+    private var readOrdinal:UInt64=0,frameOrdinal:UInt64=0
     init(_ c: NWConnection) { connection = c }
     var pathLabel: String {
         guard let p = connection.currentPath else { return "Connecting" }
@@ -257,13 +316,16 @@ final class Link {
             self.finish("Connection timed out. Check the address, pairing mode/code and Local Network permission.")
         }
     }
-    func send(_ type: UInt8, _ payload: Data = Data(), completion: (() -> Void)? = nil) {
+    func send(_ type: UInt8, _ payload: Data = Data(), traceSequence:UInt64?=nil, completion: (() -> Void)? = nil) {
         let enqueued = ProcessInfo.processInfo.systemUptime
+        FrameTrace.shared.event("send_enqueue",sequence:traceSequence,fields:["link":traceID,"type":type,"bytes":payload.count])
         queue.async { [weak self] in
             guard let self = self, !self.closed, payload.count+1 <= maxPacket else { return }
             var packet = Data(); packet.put32(UInt32(payload.count+1)); packet.append(type); packet.append(payload)
+            FrameTrace.shared.event("send_begin",sequence:traceSequence,fields:["link":self.traceID,"type":type,"bytes":packet.count])
             self.connection.send(content: packet, completion: .contentProcessed { [weak self] e in
                 if let e = e { self?.finish("Send failed: \(e)") } else {
+                    FrameTrace.shared.event("send_processed",sequence:traceSequence,fields:["link":self?.traceID ?? "closed","type":type])
                     self?.sendTimingHandler?(type,(ProcessInfo.processInfo.systemUptime-enqueued)*1000)
                     completion?()
                 }
@@ -297,9 +359,15 @@ final class Link {
             let n = data.reduce(0) { ($0 << 8) | Int($1) }
             guard n > 0, n <= maxPacket else { self.finish("Invalid packet length"); return }
             let bodyStarted = ProcessInfo.processInfo.systemUptime
+            self.readOrdinal += 1;let packetOrdinal=self.readOrdinal
+            FrameTrace.shared.event("body_begin",fields:["link":self.traceID,"packet":packetOrdinal,"bytes":n])
             self.exact(n) { [weak self] body in
                 guard let self = self else { return }
                 let payload = body.subdata(in:1..<body.count)
+                var sequence:UInt64?
+                if body[0]==2 {self.frameOrdinal += 1;sequence=self.frameOrdinal}
+                if body[0]==3 {var reader=Reader(data:payload);sequence=try? reader.u64()}
+                FrameTrace.shared.event("body_end",sequence:sequence,fields:["link":self.traceID,"packet":packetOrdinal,"type":body[0],"bytes":n])
                 self.onReceiveTiming?(body[0],(ProcessInfo.processInfo.systemUptime-bodyStarted)*1000)
                 if body[0] == 3, let handler = self.acknowledgementHandler { handler(payload) }
                 else { self.onMessage?(body[0], payload) }

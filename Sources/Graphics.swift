@@ -3,11 +3,11 @@ import Metal
 import QuartzCore
 import CoreVideo
 
-func shaderLibrary(_ device: MTLDevice, baseline: Bool = LaunchOptions.has("--baseline-encoder"), tileMajor: Bool = !LaunchOptions.has("--row-major-encoder")) throws -> MTLLibrary {
+func shaderLibrary(_ device: MTLDevice, baseline: Bool = LaunchOptions.has("--baseline-encoder"), tileMajor: Bool = !LaunchOptions.has("--row-major-encoder"), atomicStore: Bool = !LaunchOptions.has("--baseline-dirty-atomic")) throws -> MTLLibrary {
     let url = Bundle.main.url(forResource: "Shaders", withExtension: "metal") ?? URL(fileURLWithPath: "Resources/Shaders.metal")
     let source = try String(contentsOf: url)
     let options = MTLCompileOptions(); options.languageVersion = .version2_2
-    options.preprocessorMacros = ["BASELINE_ENCODER": NSNumber(value:baseline),"TILE_MAJOR_ENCODER": NSNumber(value:tileMajor)]
+    options.preprocessorMacros = ["BASELINE_ENCODER": NSNumber(value:baseline),"TILE_MAJOR_ENCODER": NSNumber(value:tileMajor),"STORE_DIRTY_FLAG":NSNumber(value:atomicStore)]
     return try device.makeLibrary(source: source, options: options)
 }
 func supportsBC(_ device: MTLDevice) -> Bool {
@@ -27,11 +27,11 @@ final class TextureEncoder {
     var width = 0, height = 0, current = 0
     let tileMajor: Bool
     private(set) var lastGPUms = 0.0, lastWaitMS = 0.0, lastGatherMS = 0.0
-    init(baseline: Bool = LaunchOptions.has("--baseline-encoder"), tileMajor: Bool = !LaunchOptions.has("--row-major-encoder")) throws {
+    init(baseline: Bool = LaunchOptions.has("--baseline-encoder"), tileMajor: Bool = !LaunchOptions.has("--row-major-encoder"), atomicStore: Bool = !LaunchOptions.has("--baseline-dirty-atomic")) throws {
         self.tileMajor = tileMajor
         guard let d = MTLCreateSystemDefaultDevice(), let q = d.makeCommandQueue() else { throw LinkError.invalid("Metal GPU unavailable") }
         device = d; queue = q
-        guard let function = try shaderLibrary(d,baseline:baseline,tileMajor:tileMajor).makeFunction(name: "encodeBC7") else { throw LinkError.invalid("Compression shader missing") }
+        guard let function = try shaderLibrary(d,baseline:baseline,tileMajor:tileMajor,atomicStore:atomicStore).makeFunction(name: "encodeBC7") else { throw LinkError.invalid("Compression shader missing") }
         pipeline = try d.makeComputePipelineState(function: function)
         guard CVMetalTextureCacheCreate(nil,nil,d,nil,&cache) == kCVReturnSuccess else { throw LinkError.invalid("Could not create GPU texture cache") }
     }
@@ -141,6 +141,7 @@ final class TextureUploader {
 }
 
 final class DisplayView: NSView {
+    let traceID=UUID().uuidString
     let device: MTLDevice
     let commandQueue: MTLCommandQueue
     let pipeline: MTLRenderPipelineState
@@ -204,6 +205,7 @@ final class DisplayView: NSView {
             autoreleasepool { do {
                 let start = ProcessInfo.processInfo.systemUptime
                 let frame = try Frame.parse(data)
+                FrameTrace.shared.event("decoded",sequence:frame.sequence,fields:["view":self.traceID,"arrival":arrival,"render_start":start])
                 let unpacked = ProcessInfo.processInfo.systemUptime
                 guard let command = self.commandQueue.makeCommandBuffer() else { throw LinkError.invalid("GPU command allocation failed") }
                 let texture = try self.uploader.encode(frame,into:command)
@@ -212,21 +214,34 @@ final class DisplayView: NSView {
                 let acquired = ProcessInfo.processInfo.systemUptime
                 try self.draw(texture,into:command,drawable:drawable)
                 let dw = drawable.texture.width, dh = drawable.texture.height
+                // Upload has copied all tile bytes into GPU-owned staging. Keep
+                // only identity in callbacks, not an entire decoded 5K frame.
+                let sequence=frame.sequence, width=frame.width, height=frame.height
                 if #available(macOS 10.15.4, *) {
                     drawable.addPresentedHandler { [weak self] drawable in
+                        FrameTrace.shared.event("presented",sequence:sequence,fields:["view":self?.traceID ?? "closed","presented_time":drawable.presentedTime])
                         self?.onPresentation?(dw, dh, drawable.presentedTime)
                     }
                 }
+                let beforePresent=ProcessInfo.processInfo.systemUptime
+                FrameTrace.shared.event("present_begin",sequence:sequence,fields:["view":self.traceID])
+                command.present(drawable)
+                let submitted=ProcessInfo.processInfo.systemUptime
                 command.addCompletedHandler { [weak self] command in
+                    let completed=ProcessInfo.processInfo.systemUptime
+                    FrameTrace.shared.event("gpu_callback",sequence:sequence,fields:["view":self?.traceID ?? "closed","gpu_start":command.gpuStartTime,"gpu_end":command.gpuEndTime])
                     guard let self = self else { return }
                     if let error = command.error { self.onError?(String(describing:error)); return }
-                    let timing = RenderTiming(sequence:frame.sequence,width:frame.width,height:frame.height,
+                    let timing = RenderTiming(sequence:sequence,width:width,height:height,
                         queueMS:(start-arrival)*1000,unpackMS:(unpacked-start)*1000,uploadMS:(uploaded-unpacked)*1000,
                         drawableMS:(acquired-uploaded)*1000,gpuMS:max(0,command.gpuEndTime-command.gpuStartTime)*1000,
-                        totalMS:(ProcessInfo.processInfo.systemUptime-arrival)*1000)
+                        totalMS:(completed-arrival)*1000,submissionMS:max(0,command.gpuStartTime-submitted)*1000,
+                        callbackMS:max(0,completed-command.gpuEndTime)*1000,presentMS:(submitted-beforePresent)*1000)
                     self.onFrame?(timing)
                 }
-                command.present(drawable); command.commit()
+                FrameTrace.shared.event("gpu_commit",sequence:sequence,fields:["view":self.traceID,"uploaded":uploaded,"acquired":acquired])
+                command.commit()
+                FrameTrace.shared.event("commit_return",sequence:sequence,fields:["view":self.traceID])
             } catch { self.onError?(String(describing:error)) } }
         }
     }
