@@ -59,6 +59,19 @@ def verify_app(app, identity, role):
         raise ValueError('The designated requirement must be stable across builds')
     if entitlements.strip() and plistlib.loads(entitlements).get('com.apple.security.get-task-allow'):
         raise ValueError('Distribution must not allow debugger attachment')
+    if info.get('SUPublicEDKey'):
+        # Sparkle's installer and XPC tools are executable distribution code too.
+        # Sign and verify each component with this developer, inside out.
+        framework = app/'Contents/Frameworks/Sparkle.framework'
+        parts = ['Versions/B/Autoupdate', 'Versions/B/Updater.app',
+                 'Versions/B/XPCServices/Downloader.xpc', 'Versions/B/XPCServices/Installer.xpc', '']
+        team_requirement = 'anchor apple generic and certificate leaf[subject.OU] = "'+identity['team']+'"'
+        for part in parts:
+            component = framework/part
+            subprocess.run(['/usr/bin/codesign','--verify','--strict','--deep','-R='+team_requirement,str(component)],check=True)
+            nested = subprocess.check_output(['/usr/bin/codesign','-dvvv',str(component)],stderr=subprocess.STDOUT,text=True)
+            if 'runtime' not in nested or not re.search(r'^Timestamp=',nested,re.M):
+                raise ValueError('Update helper needs Hardened Runtime and a secure timestamp')
     exe = app/'Contents/MacOS/RetinaLink'
     return {'bundle_id': bundle_id, 'version': info['CFBundleShortVersionString'], 'build': info['CFBundleVersion'],
             'team': identity['team'], 'designated_requirement': dr.split('designated => ', 1)[-1].strip(),

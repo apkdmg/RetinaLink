@@ -1,0 +1,9 @@
+{
+  "baseURL": null,
+  "publicEdKey": "27kS9zjGufmCxwkl+9+xXENDEVHLHK2TDemTOMDnKa4=",
+  "keychainAccount": "RetinaLink-Updates",
+  "checkInterval": 86400,
+  "sparkleVersion": "2.9.6",
+  "sparkleURL": "https://github.com/sparkle-project/Sparkle/releases/download/2.9.6/Sparkle-2.9.6.tar.xz",
+  "sparkleSHA256": "52bf9e88cdd972fc0c81501377a880e90d47031bd8ca5462488f843e2609e192"
+}

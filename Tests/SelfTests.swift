@@ -19,6 +19,13 @@ func pump(until condition: () -> Bool, timeout: Double = 10) throws {
 }
 func runSelfTests() throws {
     try runSetupTests()
+    for valid in ["http://127.0.0.1:58475", "http://127.0.0.1:58475/"] {
+        try check(UpdateSettings.validTestBase(valid),"Local update test origin rejected")
+    }
+    for invalid in ["http://example.com:80", "https://example.com", "http://user@127.0.0.1:1", "http://127.0.0.1:1/path", "http://127.0.0.1:1?url=evil", "file:///tmp/feed", "http://127.0.0.1:1#fragment"] {
+        try check(!UpdateSettings.validTestBase(invalid),"Local test seam accepted a public or ambiguous update origin")
+    }
+    print("PASS: update test origins are restricted to credential-free loopback HTTP origins; production feeds require HTTPS")
     let legacy = try JSONDecoder().decode(Hello.self,from:Data("{\"version\":1,\"bc7\":true,\"name\":\"legacy\"}".utf8))
     try check(try legacy.frameLimit()==2,"Legacy Viewer must retain two credits")
     let modern = Hello(version:1,bc7:true,name:"new",maxFramesInFlight:3,chunkedPacking:true)

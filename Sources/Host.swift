@@ -302,6 +302,11 @@ final class HostApp: NSObject, NSApplicationDelegate {
     var homeTimer: Timer?, statusItem: NSStatusItem?
     var updatingViewer = false
     var updateButton: NSButton?
+    let softwareUpdater = AutomaticUpdater()
+    let automaticUpdates = NSButton(checkboxWithTitle:"Automatically keep both Macs up to date",target:nil,action:nil)
+    let hostUpdateNote = Design.text("",12,secondary:true)
+    let viewerUpdateNote = Design.text("iMac: waiting for display connection.",12,secondary:true)
+    var viewerSupportsUpdates = false
     let displayName = Design.text("A second life for your iMac.",23,.semibold)
     let displaySubtitle = Design.text("Your desktop, beautifully extended.",14,secondary:true)
     let restartNote = Design.text("",12,secondary:true)
@@ -313,6 +318,8 @@ final class HostApp: NSObject, NSApplicationDelegate {
     var connectionLabel: String { trustedCredential == nil ? mode.connectionLabel : "Encrypted · trusted display" }
     func applicationDidFinishLaunching(_ notification: Notification) {
         installMenu()
+        UpdateSettings.applyLaunchOptions()
+        if UpdateSettings.returnToStartupAgentIfNeeded() { return }
         do { trustedCredential = try DeviceVault.credential() }
         catch { DiagnosticLog.shared.record("state",String(describing:error)); connectionNote.stringValue = String(describing:error) }
         reconnectEnabled = DeviceSettings.binding != nil && trustedCredential != nil
@@ -339,6 +346,8 @@ final class HostApp: NSObject, NSApplicationDelegate {
         if let path = LaunchOptions.value("--export-ui") { DispatchQueue.main.asyncAfter(deadline:.now()+1) { [weak self] in if let window = self?.window { Design.export(window,path:path) } } }
         if LaunchOptions.has("--setup-viewer") { runAutomatedSetup() }
         if LaunchOptions.has("--update-viewer") { updateViewerSoftware() }
+        softwareUpdater.onChange = { [weak self] status in self?.hostUpdateNote.stringValue = "This Mac: "+status.message }
+        softwareUpdater.start()
     }
     func makeHome() {
         let title = horizontal([Design.symbol("display.2",size:27),Design.text("RetinaLink",19,.semibold)])
@@ -360,15 +369,20 @@ final class HostApp: NSObject, NSApplicationDelegate {
         details.isHidden = true; advanced = details
         stats.font = .monospacedSystemFont(ofSize:11,weight:.regular)
         let footer = horizontal([Design.button("Connection Details",target:self,action:#selector(toggleDetails)),Design.text("RetinaLink \(LaunchOptions.version)",11,secondary:true)])
-        let content = Design.vertical([title,heading,hero,automatic,footer,details],spacing:23)
+        automaticUpdates.state = UpdateSettings.automatic ? .on : .off
+        automaticUpdates.target = self; automaticUpdates.action = #selector(automaticUpdatesChanged)
+        let software = Design.card([horizontal([Design.symbol("arrow.down.circle",size:22),Design.text("Always up to date",17,.semibold)]),automaticUpdates,hostUpdateNote,viewerUpdateNote,
+            horizontal([Design.text("Signed updates install automatically. Your display reconnects and stays paired.",12,secondary:true),Design.button("Update Now…",target:self,action:#selector(updateBothNow))])])
+        let content = Design.vertical([title,heading,hero,automatic,software,footer,details],spacing:20)
         heading.widthAnchor.constraint(equalTo:content.widthAnchor).isActive = true
-        for card in [hero,automatic,details] { card.widthAnchor.constraint(equalTo:content.widthAnchor).isActive = true }
-        window = Design.window("RetinaLink",content:content,width:940,height:720)
+        for card in [hero,automatic,software,details] { card.widthAnchor.constraint(equalTo:content.widthAnchor).isActive = true }
+        window = Design.window("RetinaLink",content:content,width:940,height:880)
         let item = NSStatusBar.system.statusItem(withLength:NSStatusItem.squareLength)
         if #available(macOS 11.0, *) { item.button?.image = NSImage(systemSymbolName:"display.2",accessibilityDescription:"RetinaLink") }
         let menu = NSMenu()
         menu.addItem(withTitle:"Open RetinaLink",action:#selector(openHome),keyEquivalent:"").target = self
         menu.addItem(withTitle:"Display Setup…",action:#selector(addDisplay),keyEquivalent:"").target = self
+        menu.addItem(withTitle:"Update RetinaLink…",action:#selector(updateBothNow),keyEquivalent:"").target = self
         menu.addItem(.separator()); menu.addItem(withTitle:"Quit RetinaLink",action:#selector(NSApplication.terminate(_:)),keyEquivalent:"q")
         item.menu = menu; statusItem = item; refreshHome()
     }
@@ -420,10 +434,38 @@ final class HostApp: NSObject, NSApplicationDelegate {
         case "snapshot-setup": if let window = setupController?.window { Design.export(window,path:folder.appendingPathComponent("setup-ui.png").path) }
         case "forget": forgetConfirmed()
         case "reenroll": setupController?.window?.close(); setupController = nil; runAutomatedSetup()
+        case "updates-check": checkUpdatesBoth(installNow:false)
+        case "updates-install": checkUpdatesBoth(installNow:true)
+        case "updates-automatic": setAutomaticUpdates(item["enabled"] == "true")
+        case "updates-test-feed":
+            if let url = item["url"], url.isEmpty || UpdateSettings.validTestBase(url) {
+                softwareUpdater.configureTestBase(url)
+                sendUpdateCommand(SoftwareUpdateCommand(action:"test-feed",testBaseURL:url))
+            }
         default: break
         }
     }
     @objc func openHome() { window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps:true) }
+    @objc func automaticUpdatesChanged() { setAutomaticUpdates(automaticUpdates.state == .on) }
+    func setAutomaticUpdates(_ enabled: Bool) {
+        softwareUpdater.setAutomatic(enabled); automaticUpdates.state = enabled ? .on : .off
+        sendUpdateCommand(SoftwareUpdateCommand(action:"automatic",automatic:enabled))
+    }
+    func sendUpdateCommand(_ command: SoftwareUpdateCommand) {
+        guard trustedCredential != nil, viewerSupportsUpdates, let peer = link, helloReceived,
+              let data = try? JSONEncoder().encode(command) else { return }
+        peer.send(6,data)
+    }
+    @objc func updateBothNow() {
+        let alert = NSAlert(); alert.messageText = "Update RetinaLink on both Macs?"
+        alert.informativeText = "RetinaLink checks for signed updates and installs any available versions. Your display may reconnect briefly. Pairing and login settings stay unchanged."
+        alert.addButton(withTitle:"Update Now"); alert.addButton(withTitle:"Later")
+        if alert.runModal() == .alertFirstButtonReturn { checkUpdatesBoth(installNow:true) }
+    }
+    func checkUpdatesBoth(installNow: Bool) {
+        sendUpdateCommand(SoftwareUpdateCommand(action:installNow ? "install" : "check"))
+        softwareUpdater.check(installNow:installNow)
+    }
     @objc func updateViewerSoftware() {
         guard !updatingViewer, let binding = DeviceSettings.binding, trustedCredential != nil else { return }
         updatingViewer = true; connectionNote.stringValue = "Updating display software. Pairing will be preserved…"
@@ -601,9 +643,16 @@ final class HostApp: NSObject, NSApplicationDelegate {
                         self.frameLimit = try hello.frameLimit(requested:Int(LaunchOptions.value("--frames-in-flight") ?? "3") ?? 3)
                         self.parallelPacking = hello.chunkedPacking == true && !LaunchOptions.has("--serial-packing")
                         self.helloReceived = true
+                        self.viewerSupportsUpdates = hello.automaticUpdates == true
+                        self.viewerUpdateNote.stringValue = "iMac: RetinaLink \(hello.appVersion ?? "earlier release") · build \(hello.appBuild ?? "unknown")"
+                        self.sendUpdateCommand(SoftwareUpdateCommand(action:"automatic",automatic:UpdateSettings.automatic))
                         if self.displayPaused { peer.send(5,Data("paused".utf8)); self.status.stringValue = "Display paused · securely paired" }
                         else { self.beginCapture(peer) }
                     } catch { self.stop(message:String(describing:error)) }
+                } else if type == 7, self.helloReceived, self.trustedCredential != nil, data.count < 4096 {
+                    if let status = try? JSONDecoder().decode(SoftwareUpdateStatus.self,from:data) {
+                        self.viewerUpdateNote.stringValue = "iMac: "+String(status.message.prefix(240))
+                    }
                 } else if type == 3, self.helloReceived { self.capture?.acknowledge(data) }
                 else { peer.cancel() }
             }

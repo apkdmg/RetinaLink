@@ -14,6 +14,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import urllib.parse
 
 from signing import identities, select_identity, sign, verify_app
 
@@ -229,20 +230,60 @@ def advance(args):
     return 0
 
 
+def update_feed(args):
+    from sparkle import CONFIG, fetch
+    directory = args.directory.resolve()
+    state = json.loads((directory/'release-state.json').read_text())
+    if not state.get('complete'):
+        raise ValueError('Automatic-update feeds require a completed notarized release.')
+    base = args.update_base_url or CONFIG['baseURL']
+    url = urllib.parse.urlparse(base or '')
+    local = args.local_test and url.scheme == 'http' and url.hostname == '127.0.0.1' and url.port and url.path in ('', '/')
+    if not base or (url.scheme != 'https' and not local) or not url.hostname or url.username or url.password or url.query or url.fragment:
+        raise ValueError('Use an HTTPS update base URL, or an explicit --local-test loopback HTTP origin.')
+    output = args.updates_directory.resolve()
+    sparkle = fetch()
+    public = subprocess.check_output([str(sparkle/'bin/generate_keys'), '--account', CONFIG['keychainAccount'], '-p'], text=True).strip()
+    if public != CONFIG['publicEdKey']:
+        raise ValueError('Update-signing Keychain public key does not match the key pinned in the apps.')
+    manifest = {'version':state['apps']['Host']['version'], 'build':state['apps']['Host']['build'], 'baseURL':base, 'roles':{}}
+    for role in ['Host', 'Viewer']:
+        app = directory/f'build/apps/RetinaLink {role}.app'
+        if verify_app(app,state['identity'],role) != state['apps'][role]:
+            raise ValueError(role+' differs from the notarized release')
+        info = plistlib.loads((app/'Contents/Info.plist').read_bytes())
+        if info.get('SUPublicEDKey') != public or not info.get('SURequireSignedFeed') or not info.get('SUVerifyUpdateBeforeExtraction'):
+            raise ValueError(role+' does not enforce the expected update signing policy')
+        folder = output/role.lower(); folder.mkdir(parents=True,exist_ok=True)
+        upload = folder/f'RetinaLink-{role}-{info["CFBundleShortVersionString"]}-{info["CFBundleVersion"]}.zip'
+        if not upload.exists(): archive(app,upload)
+        run([sparkle/'bin/generate_appcast','--account',CONFIG['keychainAccount'],
+             '--download-url-prefix',base.rstrip('/')+'/'+role.lower()+'/',
+             '--maximum-deltas','0','--maximum-versions','2',folder])
+        run([sparkle/'bin/sign_update','--account',CONFIG['keychainAccount'],'--verify',folder/'appcast.xml'])
+        manifest['roles'][role] = {'archive':upload.name,'sha256':digest(upload),'feedSHA256':digest(folder/'appcast.xml')}
+    (output/'release.json').write_text(json.dumps(manifest,indent=2)+'\n')
+    print('Signed Host and Viewer feeds staged; nothing uploaded: '+str(output))
+    return 0
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('command', choices=['doctor', 'credentials', 'prepare', 'advance'])
+    parser.add_argument('command', choices=['doctor', 'credentials', 'prepare', 'advance', 'update-feed'])
     parser.add_argument('--identity', default=os.environ.get('RETINALINK_SIGN_IDENTITY'))
     parser.add_argument('--profile', default=os.environ.get('RETINALINK_NOTARY_PROFILE', PROFILE))
     version = json.loads((ROOT/'Resources/Release.json').read_text())
     parser.add_argument('--directory', type=pathlib.Path,
                         default=ROOT/f'work/release-{version["version"]}-build{version["build"]}')
     parser.add_argument('--build-number', type=int)
+    parser.add_argument('--update-base-url')
+    parser.add_argument('--updates-directory', type=pathlib.Path, default=ROOT/'outputs/updates')
+    parser.add_argument('--local-test', action='store_true')
     args = parser.parse_args()
     if args.build_number is not None and args.build_number < 1:
         parser.error('Build number must be positive')
     try:
-        return {'doctor': doctor, 'credentials': credentials, 'prepare': prepare, 'advance': advance}[args.command](args) or 0
+        return {'doctor': doctor, 'credentials': credentials, 'prepare': prepare, 'advance': advance, 'update-feed':update_feed}[args.command](args) or 0
     except subprocess.CalledProcessError as error:
         # notarytool diagnostic text names missing profiles or rejected access;
         # authentication values are never supplied in its arguments here.

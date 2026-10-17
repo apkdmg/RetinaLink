@@ -20,8 +20,12 @@ final class ViewerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
     var activity: StreamingActivity?
     var phase = "ready"
     var desiredFullscreen = true
+    let softwareUpdater = AutomaticUpdater()
+    var hostSupportsUpdates = false
     func applicationDidFinishLaunching(_ notification: Notification) {
         installMenu(); addMaintenanceMenu()
+        UpdateSettings.applyLaunchOptions()
+        if UpdateSettings.returnToStartupAgentIfNeeded() { return }
         desiredFullscreen = !LaunchOptions.has("--windowed-viewer")
         automatic = !LaunchOptions.has("--standby-only")
         makeStandbyWindow()
@@ -29,6 +33,12 @@ final class ViewerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         uiTimer = Timer.scheduledTimer(withTimeInterval:1,repeats:true) { [weak self] _ in self?.publishState() }
         NSWorkspace.shared.notificationCenter.addObserver(self,selector:#selector(woke),name:NSWorkspace.didWakeNotification,object:nil)
         if automatic { connect() }
+        softwareUpdater.onChange = { [weak self] status in
+            guard let self = self, self.hostSupportsUpdates, DeviceSettings.binding != nil, let peer = self.link, self.connected,
+                  let data = try? JSONEncoder().encode(status) else { return }
+            peer.send(7,data)
+        }
+        if DeviceSettings.binding != nil { softwareUpdater.start() }
         if let path = LaunchOptions.value("--export-ui") { DispatchQueue.main.asyncAfter(deadline:.now()+1) { [weak self] in if let window = self?.window { Design.export(window,path:path) } } }
     }
     func makeStandbyWindow() {
@@ -62,6 +72,7 @@ final class ViewerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
     func connect() {
         guard automatic, !terminating, link == nil else { return }
+        hostSupportsUpdates = false
         reconnect?.cancel(); reconnect = nil
         do {
             let credential: String
@@ -88,7 +99,7 @@ final class ViewerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
             peer.onReady = { [weak self,weak peer] in
                 guard let peer = peer else { return }
                 FrameTrace.shared.event("viewer_session",fields:["link":peer.traceID,"view":view.traceID])
-                let hello = Hello(version:1,bc7:true,name:Host.current().localizedName ?? "iMac",maxFramesInFlight:3,chunkedPacking:true)
+                let hello = Hello(version:1,bc7:true,name:Host.current().localizedName ?? "iMac",maxFramesInFlight:3,chunkedPacking:true,appVersion:LaunchOptions.version,appBuild:LaunchOptions.build,automaticUpdates:true)
                 if let data = try? JSONEncoder().encode(hello) { peer.send(1,data) }
                 DispatchQueue.main.async {
                     guard let self = self, self.link === peer else { return }
@@ -99,7 +110,20 @@ final class ViewerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
             }
             peer.onMessage = { [weak self,weak peer,weak view] type,data in
                 guard let peer = peer else { return }
-                if type == 2 {
+                if type == 6, binding != nil, data.count < 4096 {
+                    guard let command = try? JSONDecoder().decode(SoftwareUpdateCommand.self,from:data) else { return }
+                    DispatchQueue.main.async {
+                        guard let self = self, self.link === peer else { return }
+                        self.hostSupportsUpdates = true
+                        switch command.action {
+                        case "automatic": if let enabled = command.automatic { self.softwareUpdater.setAutomatic(enabled) }
+                        case "check": self.softwareUpdater.check()
+                        case "install": self.softwareUpdater.check(installNow:true)
+                        case "test-feed": if let value = command.testBaseURL, value.isEmpty || UpdateSettings.validTestBase(value) { self.softwareUpdater.configureTestBase(value) }
+                        default: break
+                        }
+                    }
+                } else if type == 2 {
                     guard credits.wait(timeout:.now()) == .success else { peer.cancel(reason:"Viewer frame queue overflow"); return }
                     guard let view = view else { credits.signal(); peer.cancel(); return }
                     statistics.received(data.count); view.receive(data)
