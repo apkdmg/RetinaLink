@@ -103,7 +103,7 @@ A transparent compositor-pulse on/off test improved after the pulse was removed 
 
 ## Earlier release tests with UI-bridge interference
 
-The supplied build 30 is tested with no experimental probe flags and frame tracing disabled. The automatic one-second snapshots still run. First five and final two seconds are excluded from the aggregate summaries. The scroll test polls over SSH every two seconds; native window motion collects afterward.
+The earlier build-30 controls were tested with no experimental probe flags and frame tracing disabled. The automatic one-second snapshots still run. First five and final two seconds are excluded from the aggregate summaries. The scroll test polls over SSH every two seconds; native window motion collects afterward.
 
 | Workload | Duration | Capture/s | Delivered/s | Positive presentation fps | Host encode + pack | ACK cycle |
 |---|---:|---:|---:|---:|---:|---:|
