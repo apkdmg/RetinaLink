@@ -1,3 +1,76 @@
+# RetinaLink 0.3.0 build 43 — setup and appliance UX, 17 October 2026
+
+## Implemented behavior
+
+Setup and everyday controls now live on Host. Its native AppKit interface uses system typography, controls, SF Symbols and `NSVisualEffectView` materials. Host discovers SSH-enabled Macs, checks the selected iMac's macOS and FileVault status before installation, installs the bundled universal Viewer, and enrolls a saved device credential. A new installation still needs Remote Login enabled and an accessible signed-in account once; discovery is not authorization.
+
+Viewer runs as a borderless native-panel window with automatically hidden Dock/menu bar. It has no routine address, pairing-code or Connect controls. It starts after graphical sign-in through its optional per-user login agent, shows fullscreen standby when disconnected, reconnects automatically and resumes without Viewer input when Host reconnects. Closing the paired Host window leaves streaming active in the menu bar. Host can identify, pause, reconnect or forget the display.
+
+FileVault, automatic login, passwords, screen locking and system sharing policies are unchanged. The standard flow creates no volume, partition or additional macOS installation. FileVault-on and unknown states immediately explain the boot restriction; only a verified FileVault-off iMac receives the optional dedicated-display automatic-login guide. The guide explains physical access and account isolation and leaves password entry and automatic-login configuration to the owner in macOS. A user login agent cannot run before an Intel Mac's FileVault unlock or before its graphical sign-in.
+
+## Build and correctness checks
+
+- Final apps are **0.3.0, build 43**. Host is arm64; Viewer is universal x86_64/arm64. Built and installed executable hashes match on both Macs; strict deep signature verification passes. These are ad-hoc development signatures, not notarized distribution signatures.
+- Host and actual iMac Viewer self-tests pass. They retain codec, packet validation, pairing, tile upload and capture-credit tests, plus enrollment input validation, FileVault on/off/unknown guidance and Aqua-only startup-agent checks.
+- Host's isolated simulated permission-denial test passes: denial leaves the listener and authenticated connection alive, releases capture resources and permits explicit retry. It does not read screen content or grant an OS permission.
+- A separate production-renderer probe on the actual AMD iMac renders native 5120 × 2880 full/sparse/full phases. Settled GPU-completion rates are **59.98 / 59.98 / 60.01 updates/s**; full-frame upload setup averages **5.15 / 4.87 ms**, with GPU work **3.75 / 3.63 ms**. This isolates the renderer and omits capture, compression and network work; it is not an end-to-end or physical-FPS result.
+
+## Native setup and recovery validation
+
+The **complete final build-43 suite passes** using native Launch Services for the initial Host and its real GUI login agent for Host recovery. It tests the standard setup selection, with dedicated display mode off:
+
+| Actual SSH-controlled check | Result |
+|---|---|
+| Host installs/enrolls bundled Viewer without Viewer interaction | Pass |
+| Native 5K stream, trusted connection, fullscreen, automatic Dock/menu-bar hiding | Pass |
+| Host Disconnect → fullscreen standby; Connect → streaming | Pass |
+| Closing the paired Host home leaves streaming active | Pass |
+| Kill verified Viewer process → launchd restart and fullscreen reconnection | Pass |
+| Forget → unpaired fullscreen readiness and startup removal | Pass |
+| Host re-enrollment → streaming without Viewer input | Pass |
+| Independent Host GUI login-agent startup restores trust and streaming | Pass |
+| Exit app-owned tunnel → fullscreen reconnecting → passwordless automatic repair | Pass |
+| FileVault and automatic-login before/after comparison unchanged | Pass |
+| UI capture helper absent before/after | Pass |
+
+The native-launch test initially exposed a stale Screen Recording approval for an older ad-hoc executable. The macOS permission log explicitly reported that its stored code requirement did not match build 43. Enabling the old switch and restarting did not resolve it. The owner removed that stale entry and added the permanently installed Host again through System Settings; the unchanged binary then passed native capture and the complete suite. No privacy database or system trust setting was modified. Earlier direct developer-tool launches that inherited the tool's capture authority are not used as evidence of independent Host permission.
+
+## Final live native-5K regression
+
+After the native recovery suite, the same production login-agent Host and fullscreen Viewer run an untraced 45-second GPU scrolling scene through ScreenCaptureKit, compression, SSH/TLS, unpacking and Metal. Both endpoints report 0.3.0 build 43. After excluding the first five and last two seconds:
+
+| Measurement | Settled mean |
+|---|---:|
+| Source draw/GPU-completion counter | 59.53/s |
+| Complete captures / Host delivered updates | 59.49/s |
+| Viewer GPU-completed updates | 59.49/s |
+| Host encode + pack | 7.24 ms |
+| Host acknowledgement cycle | 24.71 ms |
+| Viewer upload setup / GPU work | 2.22 / 4.01 ms |
+| Viewer application queue / drawable wait | 0.01 / 0.00 ms |
+| Traffic | About 126 Mbps |
+| Capture credit-discard events | 0 |
+
+Native dimensions remain 5120 × 2880. One-second Viewer rates range from 50.1 to 60.9/s; this is not a claim of a constant 60 new images each second. Source production also dips. The API unique-positive timestamp rate is 57.63/s; the prior AMD driver evidence below explains why this is not a physical-FPS calculation. No new driver trace or camera measurement was taken. Frame tracing and experimental pacing are off, and the UI capture helper stays off. One SSH read of startup-agent configuration overlaps this run; it is a realistic bounded regression, not an exclusive-idle benchmark. Evidence is `work/perf/setup-043-native-gpu-scroll` and `work/setup-043-performance-summary.txt`.
+
+## Connection and trust boundaries
+
+A separate earlier native control-plane recovery test passes with capture permission pending: exiting only the app-owned SSH master leaves Viewer fullscreen; Host recreates its loopback tunnel from its saved Keychain identity without a password and restores trusted TLS. A command attempt through the restricted tunnel key is rejected. Management SSH and Screen Sharing remain connected. This control-plane result is distinct from capture recovery.
+
+Enrollment uses an authenticated owner SSH session. The stream credential is random 128-bit material; the tunnel has a separate Ed25519 key. Persistent secrets are in the login Keychains. The short-lived GUI enrollment helper consumes an owner-only temporary request over SSH and deletes it before saving trust. Unrelated SSH authorized keys are preserved; the app key cannot open a shell or PTY and is scoped to loopback forwarding. No password, private key, stream credential, SSH control socket or raw enrollment request is included in release artifacts.
+
+Ad-hoc development builds use a build-specific Keychain namespace and require Host-side re-enrollment after upgrading; they do not automatically approve changed code. Missing or locked trusted credentials fail closed. macOS Screen Recording may also need its stale development entry replaced by the owner. Consistent Developer ID signing and notarization are required for the intended consumer update experience; no valid signing identity is installed in this development environment.
+
+## Evidence and limits
+
+App-only UI exports were reviewed on both machines without a screen capture bridge. Final setup and Host exports are `work/setup-030/control/setup-ui.png` and `host-ui.png`; the Host image records its preparing-desktop transition. The final Viewer standby export is `work/viewer-043-standby.png`. The complete native suite output is `work/setup-043-native-test.stdout`; its result is `work/setup-030/result.json`. Test evidence remains under `work/setup-030`, `work/self-test-043-host.txt`, `work/viewer-self-test-043.txt`, `work/permission-test-043.txt` and `work/render-probe-042-analysis.json`. The probe retains its build-42 label; build 43 changes the Host missing-credential guard and build/trust metadata, not the renderer.
+
+The iMac's measured FileVault status is off and automatic login is not configured. Neither was changed. FileVault-on/unknown branches are checked with test inputs, not by toggling actual disk encryption. No reboot, logout or screen lock was triggered: loading/restarting a GUI login agent is not a cold-boot test. The agent UI capture helper remains off. Native 5K60 remains a target; stable physical 60 new displayed images/s and direct-monitor-equivalent latency are not established.
+
+The previous rendering/capture investigation follows unchanged for its separate timing evidence.
+
+---
+
 # RetinaLink 0.2.10 build 38 — validation, 17 October 2026
 
 ## Outcome and corrected interpretation

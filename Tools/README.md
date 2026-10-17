@@ -64,3 +64,23 @@ Keep UI automation inactive during performance measurements. Resetting the REPL 
 Build 31+ traces `surface_update`, `redraw` and `redraw_presented`, including the original content sequence. This accounts for the static-image resize path separately from received frames. `--skip-redundant-redraws` is a diagnostic control, not enabled by default; the steady trace found no extra redraw presentations.
 
 Build 32 Viewer `--presentation-plan 0,24,0 --presentation-period 25` runs immediate/timed/immediate phases. Leads must be finite, 0…40 ms, plans bounded to six phases, first and last lead zero, and periods 10…60 seconds. Targets and phase changes are traced. The final zero phase persists, returning to normal rendering. Discard transition windows; scheduling changes can perturb queued frames. This experiment did not establish a production gain and is disabled by default. Timed presentation can add latency; do not report its FPS without that tradeoff.
+
+## Host-led setup and appliance recovery (0.3.0)
+
+`test_display_setup.py` uses an existing authenticated SSH ControlMaster and the actual Host setup UI controller. Pass a permanently installed Host app whose bundled Viewer archive matches it:
+
+```sh
+python3 Tools/test_display_setup.py \
+  --host-app '/Users/YOUR_USER/Applications/RetinaLink Host.app' \
+  --address IMAC_ADDRESS --user IMAC_USER \
+  --socket /absolute/path/to/existing/control \
+  --workspace /absolute/path/to/retinaku
+```
+
+The harness is intended for this development setup, not an end-user installer. It replaces the verified running RetinaLink Host, drives enrollment, and installs/loads the selected user login agents. It uses `work/setup-030/control` as an explicitly enabled local test-command directory; that seam is absent from normal app launches. Output is saved in `work/setup-030`. The private directory contains only test state, metadata reports and app-rendered interface images; enrollment secrets are not written there.
+
+The default tests standard display setup. Add `--dedicated-display` to exercise that opt-in selection; it still never enables automatic login. Host launches through native Launch Services, then through its GUI login agent during recovery, so Screen Recording must be granted to the installed Host itself. A terminal or Codex capture grant is not substituted for that permission.
+
+It tests fullscreen streaming/standby, Host pause/resume, window-close behavior, a verified Viewer process crash, pairing removal and re-enrollment, Host startup through its GUI login agent and recreation of the app-owned display tunnel. It does not reboot, log out, lock a display, stop Screen Sharing, run a UI capture bridge, disable FileVault, change automatic login or modify screen-lock policy. Login-agent loading in the existing GUI session is not evidence of bypassing FileVault or an actual cold-boot test.
+
+For app-only visual review, `--export-ui /absolute/file.png` renders that app’s own content view; it does not capture the desktop or other applications. Viewer `--standby-only --windowed-viewer` is a bounded preview option when paired with separate `--diagnostics-path` and `--ui-state-path` destinations. Do not leave preview/test options on a production login agent.

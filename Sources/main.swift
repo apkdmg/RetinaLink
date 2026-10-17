@@ -1,5 +1,23 @@
 import AppKit
 
+if ProcessInfo.processInfo.environment["RETINALINK_SSH_ASKPASS"] == "1" { runSSHAskpass() }
+
+#if !HOST
+if LaunchOptions.has("--apply-enrollment") {
+    // Launch Services puts this short-lived enrollment helper in the signed-in
+    // user's security session, where its login Keychain is available.
+    let app = NSApplication.shared; app.setActivationPolicy(.accessory)
+    let delegate = EnrollmentApplication(); app.delegate = delegate; app.run(); exit(0)
+}
+if LaunchOptions.has("--enroll-stdin") {
+    do {
+        let data = FileHandle.standardInput.readData(ofLength:16_385)
+        let result = try ViewerEnrollment.enroll(data,replacing:LaunchOptions.has("--replace-pairing"))
+        FileHandle.standardOutput.write(try JSONSerialization.data(withJSONObject:result,options:.sortedKeys)); print(""); exit(0)
+    } catch { fputs("\(error)\n",stderr); exit(1) }
+}
+#endif
+
 if CommandLine.arguments.contains("--transport-test") {
     do { try runTransportTests(); exit(0) } catch { fputs("FAIL: \(error)\n",stderr); exit(1) }
 }

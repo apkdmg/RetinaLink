@@ -295,10 +295,25 @@ final class HostApp: NSObject, NSApplicationDelegate {
     var pending: [ObjectIdentifier:Link] = [:]
     var recentDiagnostics: [String] = []
     var shortCode = "", longCode = randomPairingCode()
+    var trustedCredential: String?
+    var reconnectEnabled = false, quitting = false
+    var displayPaused = UserDefaults.standard.bool(forKey:"displayPaused")
+    var setupController: HostSetupController?, tunnel: TunnelSupervisor?
+    var homeTimer: Timer?, statusItem: NSStatusItem?
+    let displayName = Design.text("A second life for your iMac.",23,.semibold)
+    let displaySubtitle = Design.text("Your desktop, beautifully extended.",14,secondary:true)
+    let restartNote = Design.text("",12,secondary:true)
+    let connectionNote = Design.text("",12,secondary:true)
+    let homeStatus = Design.text("Ready to add a display",13,.medium)
+    var advanced: NSView?
     var mode: PairingMode { PairingMode(rawValue:pairingMode.indexOfSelectedItem) ?? .shortCode }
-    var code: String? { mode == .noCode ? nil : (mode == .shortCode ? shortCode : longCode) }
+    var code: String? { trustedCredential ?? (mode == .noCode ? nil : (mode == .shortCode ? shortCode : longCode)) }
+    var connectionLabel: String { trustedCredential == nil ? mode.connectionLabel : "Encrypted · trusted display" }
     func applicationDidFinishLaunching(_ notification: Notification) {
         installMenu()
+        do { trustedCredential = try DeviceVault.credential() }
+        catch { DiagnosticLog.shared.record("state",String(describing:error)); connectionNote.stringValue = String(describing:error) }
+        reconnectEnabled = DeviceSettings.binding != nil && trustedCredential != nil
         shortCode = savedShortCode(UserDefaults.standard.string(forKey:"hostShortCode")) { UserDefaults.standard.set($0,forKey:"hostShortCode") }
         pairingMode.addItems(withTitles:PairingMode.allCases.map(\.title))
         pairingMode.selectItem(at:(PairingMode(rawValue:UserDefaults.standard.integer(forKey:"pairingMode")) ?? .shortCode).rawValue)
@@ -313,20 +328,168 @@ final class HostApp: NSObject, NSApplicationDelegate {
         retryCaptureButton = NSButton(title:"Retry capture",target:self,action:#selector(retryCapture)); retryCaptureButton.isEnabled = false
         pairingModeChanged()
         addresses.stringValue = localAddresses()
-        window = makeWindow("RetinaLink Host",views:[
-            label("RetinaLink",size:30,weight:.bold),label("HOST  ·  VERSION \(LaunchOptions.version) · BUILD \(LaunchOptions.build)",size:11,weight:.semibold),
-            label("Extend this Mac’s desktop to your iMac over Wi-Fi, Ethernet or Thunderbolt networking. Both Macs must be reachable on the local network."),
-            label("Display profile",weight:.semibold),profiles,
-            horizontal([label("Pairing",weight:.semibold),pairingMode]),pairing,pairingNote,
-            horizontal([button,copyCodeButton,newCodeButton]),status,stats,
-            horizontal([NSButton(title:"Copy diagnostics",target:self,action:#selector(copyDiagnostics)),retryCaptureButton,
-                        NSButton(title:"Show app in Finder",target:self,action:#selector(revealApp))]),
-            label("Manual connection addresses · port 58473",size:11,weight:.semibold),addresses,
-            label("Experimental: 5K60 is a target, not a performance guarantee. BC7 texture compression is lossy. The acknowledgement cycle is not input-to-screen latency. Lower the profile if your network cannot keep up.",size:11)
-        ],height:830)
+        makeHome()
         NSApp.activate(ignoringOtherApps:true)
         DiagnosticLog.shared.record("launch", "Host ready; activity \(!LaunchOptions.has("--no-streaming-activity")); capture depth \(LaunchOptions.value("--capture-depth") ?? "5"); tile layout \(!LaunchOptions.has("--row-major-encoder")); reusable packer \(!LaunchOptions.has("--baseline-packing")); baseline encoder \(LaunchOptions.has("--baseline-encoder")); inline capture \(LaunchOptions.has("--inline-capture"))")
-        if LaunchOptions.has("--autostart") { start() }
+        if LaunchOptions.has("--autostart") || reconnectEnabled { start() }
+        if reconnectEnabled { startTunnel() }
+        homeTimer = Timer.scheduledTimer(withTimeInterval:1,repeats:true) { [weak self] _ in self?.refreshHome() }
+        if let path = LaunchOptions.value("--export-ui") { DispatchQueue.main.asyncAfter(deadline:.now()+1) { [weak self] in if let window = self?.window { Design.export(window,path:path) } } }
+        if LaunchOptions.has("--setup-viewer") { runAutomatedSetup() }
+    }
+    func makeHome() {
+        let title = horizontal([Design.symbol("display.2",size:27),Design.text("RetinaLink",19,.semibold)])
+        let artwork = MonitorArtwork(); artwork.widthAnchor.constraint(equalToConstant:230).isActive = true; artwork.heightAnchor.constraint(equalToConstant:145).isActive = true
+        let information = Design.vertical([displayName,displaySubtitle,homeStatus,connectionNote],spacing:10)
+        let hero = Design.card([horizontal([artwork,information]),horizontal([
+            Design.button("Arrange Displays",target:self,action:#selector(arrange)),
+            Design.button("Identify",target:self,action:#selector(identify)),button])],padding:25)
+        let add = Design.button("Add Display",target:self,action:#selector(addDisplay),primary:true)
+        let spacer = NSView(); spacer.setContentHuggingPriority(.defaultLow,for:.horizontal)
+        let heading = horizontal([Design.vertical([Design.text("Your displays",30,.bold),Design.text("Set up once. Connect effortlessly.",14,secondary:true)],spacing:7),spacer,add])
+        let automatic = Design.card([Design.message("Always ready, after sign-in",detail:"Viewer opens fullscreen and reconnects to this Mac automatically. No pairing codes or controls are needed on the iMac.",symbol:"arrow.triangle.2.circlepath"),restartNote,
+            horizontal([Design.button("Display Setup…",target:self,action:#selector(addDisplay)),Design.button("Dedicated Display Guide…",target:self,action:#selector(dedicatedGuide))])])
+        let details = Design.card([Design.text("Connection details",17,.semibold),Design.text("Native 5K at a target of 60 updates/s. Actual performance depends on capture and network conditions.",12,secondary:true),status,profiles,stats,
+            horizontal([Design.button("Copy Diagnostics",target:self,action:#selector(copyDiagnostics)),retryCaptureButton]),
+            Design.button("Forget Display…",target:self,action:#selector(forgetDisplay)),
+            Design.text("Legacy connection",13,.semibold),horizontal([pairingMode,copyCodeButton,newCodeButton]),pairing,pairingNote,addresses])
+        details.isHidden = true; advanced = details
+        stats.font = .monospacedSystemFont(ofSize:11,weight:.regular)
+        let footer = horizontal([Design.button("Connection Details",target:self,action:#selector(toggleDetails)),Design.text("RetinaLink \(LaunchOptions.version)",11,secondary:true)])
+        let content = Design.vertical([title,heading,hero,automatic,footer,details],spacing:23)
+        heading.widthAnchor.constraint(equalTo:content.widthAnchor).isActive = true
+        for card in [hero,automatic,details] { card.widthAnchor.constraint(equalTo:content.widthAnchor).isActive = true }
+        window = Design.window("RetinaLink",content:content,width:940,height:720)
+        let item = NSStatusBar.system.statusItem(withLength:NSStatusItem.squareLength)
+        if #available(macOS 11.0, *) { item.button?.image = NSImage(systemSymbolName:"display.2",accessibilityDescription:"RetinaLink") }
+        let menu = NSMenu()
+        menu.addItem(withTitle:"Open RetinaLink",action:#selector(openHome),keyEquivalent:"").target = self
+        menu.addItem(withTitle:"Display Setup…",action:#selector(addDisplay),keyEquivalent:"").target = self
+        menu.addItem(.separator()); menu.addItem(withTitle:"Quit RetinaLink",action:#selector(NSApplication.terminate(_:)),keyEquivalent:"q")
+        item.menu = menu; statusItem = item; refreshHome()
+    }
+    func refreshHome() {
+        consumeTestCommand()
+        if let binding = DeviceSettings.binding {
+            displayName.stringValue = binding.viewerName
+            displaySubtitle.stringValue = displayPaused ? "Paused · still securely paired" : (capture == nil ? "Ready to connect · Native 5K" : "Extended desktop · Native 5K")
+            homeStatus.stringValue = waitingForPermission ? "Allow Screen Recording on this Mac to continue" : (displayPaused ? "Ready whenever you are" : (startingCapture ? "Preparing your desktop…" : (capture == nil ? "Waiting for your iMac" : "Connected securely")))
+            homeStatus.textColor = waitingForPermission ? .systemOrange : (capture == nil ? .secondaryLabelColor : .systemGreen)
+            restartNote.stringValue = binding.fileVault.setupMessage
+            button?.title = displayPaused ? "Connect" : "Disconnect"
+            button?.action = #selector(toggle)
+            if trustedCredential == nil {
+                homeStatus.stringValue = "Finish display setup to restore this connection"
+                button?.title = "Restore Pairing"; button?.action = #selector(addDisplay)
+            }
+            if waitingForPermission { button?.title = "Retry Capture"; button?.action = #selector(retryCapture) }
+            pairing.stringValue = "Device pairing is managed automatically."
+            pairingNote.stringValue = "Credentials are stored in Keychain. Your iMac stays paired across app restarts."
+            copyCodeButton?.isHidden = true; newCodeButton?.isHidden = true; pairingMode.isHidden = true
+        } else {
+            restartNote.stringValue = "Setup checks FileVault first and explains any restart limits. No disk changes or additional macOS installation."
+            displaySubtitle.stringValue = "Choose Add Display to install and pair your iMac from here."
+            button?.title = "Set Up Display"; button?.action = #selector(addDisplay)
+            if listener == nil && link == nil { homeStatus.stringValue = "Ready for setup from this Mac" }
+        }
+        if let path = LaunchOptions.value("--ui-state-path") {
+            let state: [String:Any] = ["version":LaunchOptions.version,"build":LaunchOptions.build,"pid":ProcessInfo.processInfo.processIdentifier,"trusted":reconnectEnabled,"paused":displayPaused,"listening":listener != nil,"streaming":capture != nil && helloReceived,"setupStage":setupController?.stage ?? "closed","fileVault":DeviceSettings.binding?.fileVault.rawValue ?? "unknown","time":Date().timeIntervalSince1970]
+            if let data = try? JSONSerialization.data(withJSONObject:state,options:.sortedKeys) { try? data.write(to:URL(fileURLWithPath:path),options:.atomic) }
+        }
+    }
+    func consumeTestCommand() {
+        // Explicit, local-only test seam: exercises the actual button actions
+        // without an accessibility/screen-capture helper. Absent in normal runs.
+        guard let directory = LaunchOptions.value("--test-control-directory") else { return }
+        let folder = URL(fileURLWithPath:directory,isDirectory:true), file = folder.appendingPathComponent("command.json")
+        guard let data = try? Data(contentsOf:file), data.count <= 1024,
+              let item = try? JSONSerialization.jsonObject(with:data) as? [String:String], let command = item["command"] else { return }
+        try? FileManager.default.removeItem(at:file)
+        switch command {
+        case "pause": if !displayPaused { toggle() }
+        case "resume": if displayPaused { toggle() }
+        case "identify": identify()
+        case "close-home": window.close()
+        case "open-home": openHome()
+        case "snapshot": Design.export(window,path:folder.appendingPathComponent("host-ui.png").path)
+        case "snapshot-setup": if let window = setupController?.window { Design.export(window,path:folder.appendingPathComponent("setup-ui.png").path) }
+        case "forget": forgetConfirmed()
+        case "reenroll": setupController?.window?.close(); setupController = nil; runAutomatedSetup()
+        default: break
+        }
+    }
+    @objc func openHome() { window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps:true) }
+    @objc func toggleDetails() { advanced?.isHidden.toggle() }
+    @objc func arrange() { NSWorkspace.shared.open(URL(string:"x-apple.systempreferences:com.apple.Displays-Settings.extension")!) }
+    @objc func identify() { link?.send(5,Data("identify".utf8)) }
+    @objc func forgetDisplay() {
+        guard let binding = DeviceSettings.binding else { return }
+        let alert = NSAlert(); alert.alertStyle = .warning; alert.messageText = "Forget \(binding.viewerName)?"
+        alert.informativeText = "This disconnects the display and removes saved pairing and automatic Viewer startup. The iMac must be reachable to finish. Its FileVault, files and login settings stay unchanged."
+        alert.addButton(withTitle:"Forget Display"); alert.addButton(withTitle:"Cancel")
+        if alert.runModal() == .alertFirstButtonReturn { forgetConfirmed() }
+    }
+    func forgetConfirmed() {
+        guard let binding = DeviceSettings.binding else { return }
+        connectionNote.stringValue = "Removing pairing securely…"
+        DispatchQueue.global(qos:.utility).async { [weak self] in
+            do {
+                let connection = try SetupConnection(SetupTarget(address:binding.address,username:binding.username,managementSocket:LaunchOptions.value("--ssh-control-path")))
+                try connection.ensure(); try connection.removeBinding(binding.hostID)
+                connection.releaseOldForward()
+                DeviceVault.remove(DeviceVault.credentialAccount); DeviceVault.remove(TunnelIdentity.account)
+                UserDefaults.standard.removeObject(forKey:DeviceSettings.bindingKey); UserDefaults.standard.synchronize()
+                try? FileManager.default.removeItem(at:StartupAgent.path(role:"Host"))
+                DispatchQueue.main.async {
+                    guard let self = self else { return }; self.reconnectEnabled = false; self.trustedCredential = nil; self.tunnel?.stop(); self.tunnel = nil
+                    self.stop(message:"Display removed. Choose Add Display to set it up again.",reconnect:false)
+                    self.displayName.stringValue = "A second life for your iMac."; self.connectionNote.stringValue = "Pairing removed on both Macs."
+                    self.refreshHome()
+                }
+            } catch { DispatchQueue.main.async { self?.connectionNote.stringValue = String(describing:error) } }
+        }
+    }
+    @objc func dedicatedGuide() {
+        addDisplay()
+        if let controller = setupController, let binding = DeviceSettings.binding {
+            controller.preflight = ViewerPreflight(name:binding.viewerName,version:"",fileVault:binding.fileVault,automaticLoginConfigured:binding.automaticLoginConfigured)
+            controller.connection = try? SetupConnection(SetupTarget(address:binding.address,username:binding.username,managementSocket:LaunchOptions.value("--ssh-control-path")))
+            controller.showLoginGuide()
+            controller.preflight = nil
+        }
+    }
+    @objc func addDisplay() {
+        if setupController == nil { setupController = HostSetupController(host:self) }
+        setupController?.show()
+    }
+    func enrollmentCompleted(_ binding: DeviceBinding) {
+        do { trustedCredential = try DeviceVault.credential() } catch { connectionNote.stringValue = String(describing:error); return }
+        reconnectEnabled = true; displayPaused = false; UserDefaults.standard.set(false,forKey:"displayPaused")
+        stop(message:"Your display is paired. Connecting automatically…")
+        startTunnel(); refreshHome()
+        DiagnosticLog.shared.record("setup","Enrollment complete; encrypted trusted pairing; Viewer startup enabled; FileVault unchanged")
+    }
+    func startTunnel() {
+        tunnel?.stop(); let tunnel = TunnelSupervisor(); self.tunnel = tunnel
+        tunnel.onState = { [weak self] message in DispatchQueue.main.async {
+            self?.connectionNote.stringValue = message.hasPrefix("Secure") ? "Paired with this Mac · reconnects automatically" : "Check the iMac’s power, network or sign-in screen."
+        } }; tunnel.start()
+    }
+    func runAutomatedSetup() {
+        addDisplay()
+        guard let controller = setupController else { return }
+        controller.address.stringValue = LaunchOptions.value("--viewer-address") ?? ""
+        controller.username.stringValue = LaunchOptions.value("--viewer-user") ?? ""
+        controller.dedicated.state = LaunchOptions.has("--dedicated-display") ? .on : .off
+        controller.onCompletion = { outcome in
+            let report: [String:Any]
+            switch outcome {
+            case .success(let binding): report = ["success":true,"fileVault":binding.fileVault.rawValue,"fileVaultChanged":false,"automaticLoginChanged":false,"startupAtLogin":binding.viewerStartup,"dedicatedDisplay":binding.dedicatedDisplay]
+            case .failure(let error): report = ["success":false,"error":String(describing:error)]
+            }
+            if let path = LaunchOptions.value("--setup-report"), let data = try? JSONSerialization.data(withJSONObject:report,options:.sortedKeys) { try? data.write(to:URL(fileURLWithPath:path),options:.atomic) }
+        }
+        controller.advance()
     }
     @objc func pairingModeChanged() {
         UserDefaults.standard.set(mode.rawValue,forKey:"pairingMode")
@@ -350,7 +513,7 @@ final class HostApp: NSObject, NSApplicationDelegate {
     @objc func copyCode() { guard let code = code else { return }; NSPasteboard.general.clearContents(); NSPasteboard.general.setString(code,forType:.string) }
     @objc func copyDiagnostics() {
         let samples = recentDiagnostics.isEmpty ? stats.stringValue : recentDiagnostics.joined(separator:"\n\n")
-        let text = "RetinaLink Host \(LaunchOptions.version) (build \(LaunchOptions.build)) · \(ProcessInfo.processInfo.operatingSystemVersionString)\nApp: \(Bundle.main.bundlePath)\nTransport: 0.2.2 baseline · default priority · whole-message I/O\nLegacy Screen Recording preflight: \(CGPreflightScreenCaptureAccess())\n\(profiles.titleOfSelectedItem ?? "")\n\(mode.connectionLabel)\n\(status.stringValue)\nRecent one-second samples, oldest first:\n\(samples)"
+        let text = "RetinaLink Host \(LaunchOptions.version) (build \(LaunchOptions.build)) · \(ProcessInfo.processInfo.operatingSystemVersionString)\nApp: \(Bundle.main.bundlePath)\nTransport: 0.2.2 baseline · default priority · whole-message I/O\nLegacy Screen Recording preflight: \(CGPreflightScreenCaptureAccess())\n\(profiles.titleOfSelectedItem ?? "")\n\(connectionLabel)\n\(status.stringValue)\nRecent one-second samples, oldest first:\n\(samples)"
         NSPasteboard.general.clearContents(); NSPasteboard.general.setString(text,forType:.string)
     }
     @objc func revealApp() { NSWorkspace.shared.activateFileViewerSelecting([Bundle.main.bundleURL]) }
@@ -358,16 +521,30 @@ final class HostApp: NSObject, NSApplicationDelegate {
         guard waitingForPermission, !startingCapture, !stopping, let peer = link else { return }
         beginCapture(peer)
     }
-    @objc func toggle() { if listener != nil || link != nil { stop() } else { start() } }
+    @objc func toggle() {
+        if reconnectEnabled {
+            displayPaused.toggle(); UserDefaults.standard.set(displayPaused,forKey:"displayPaused")
+            if displayPaused { stop(message:"Display paused. Pairing is saved.") }
+            else if let peer = link, helloReceived { peer.send(5,Data("resume".utf8)); beginCapture(peer) }
+            else if listener == nil { start() }
+            refreshHome()
+        } else if listener != nil || link != nil { stop(reconnect:false) } else { start() }
+    }
     func start() {
-        guard !stopping else { return }
+        guard !stopping, listener == nil else { return }
+        guard DeviceSettings.binding == nil || trustedCredential != nil else {
+            status.stringValue = "Device trust is unavailable. Finish Display Setup to restore this connection."
+            // A locked/missing Keychain entry must never fall back to a weak
+            // legacy code for a display that was already enrolled securely.
+            refreshHome(); return
+        }
         do {
             let listener = try NWListener(using:networkParameters(code),on:NWEndpoint.Port(rawValue:defaultPort)!)
             self.listener = listener; listener.service = NWListener.Service(name:Host.current().localizedName ?? "RetinaLink Host",type:serviceType)
             listener.stateUpdateHandler = { [weak self] state in
                 guard let self = self else { return }
                 switch state {
-                case .ready: self.status.stringValue = "Waiting for Viewer · \(self.mode.connectionLabel)"; self.addresses.stringValue = localAddresses(); DiagnosticLog.shared.record("state", "Waiting for Viewer")
+                case .ready: self.status.stringValue = "Waiting for Viewer · \(self.connectionLabel)"; self.addresses.stringValue = localAddresses(); DiagnosticLog.shared.record("state", "Waiting for Viewer")
                 case .failed(let error): self.stop(message:"Could not listen: \(error)")
                 case .waiting(let error): self.status.stringValue = "Waiting for network permission: \(error)"
                 default: break
@@ -387,7 +564,7 @@ final class HostApp: NSObject, NSApplicationDelegate {
                 guard self.link == nil, self.listener != nil else { peer.cancel(); return }
                 self.pending.removeValue(forKey:id); self.link = peer; self.helloReceived = false
                 for other in self.pending.values { other.cancel() }; self.pending.removeAll()
-                self.status.stringValue = "\(self.mode.connectionLabel) · \(peer.pathLabel)"
+                self.status.stringValue = "\(self.connectionLabel) · \(peer.pathLabel)"
                 DispatchQueue.main.asyncAfter(deadline:.now()+10) { [weak self,weak peer] in
                     guard let self = self, self.link === peer, !self.helloReceived else { return }; peer?.cancel()
                 }
@@ -403,7 +580,9 @@ final class HostApp: NSObject, NSApplicationDelegate {
                         guard hello.version == 1, hello.bc7 else { throw LinkError.invalid("Viewer does not support this protocol or GPU format") }
                         self.frameLimit = try hello.frameLimit(requested:Int(LaunchOptions.value("--frames-in-flight") ?? "3") ?? 3)
                         self.parallelPacking = hello.chunkedPacking == true && !LaunchOptions.has("--serial-packing")
-                        self.helloReceived = true; self.beginCapture(peer)
+                        self.helloReceived = true
+                        if self.displayPaused { peer.send(5,Data("paused".utf8)); self.status.stringValue = "Display paused · securely paired" }
+                        else { self.beginCapture(peer) }
                     } catch { self.stop(message:String(describing:error)) }
                 } else if type == 3, self.helloReceived { self.capture?.acknowledge(data) }
                 else { peer.cancel() }
@@ -445,7 +624,7 @@ final class HostApp: NSObject, NSApplicationDelegate {
                 try await session.start(width:width,height:height,fps:fps)
                 guard !Task.isCancelled, self.link === peer else { await session.stop(); return }
                 self.startingCapture = false
-                self.status.stringValue = "Streaming \(width) × \(height) · target \(fps) fps · \(peer.pathLabel)\n\(self.mode.connectionLabel)"
+                self.status.stringValue = "Streaming \(width) × \(height) · target \(fps) fps · \(peer.pathLabel)\n\(self.connectionLabel)"
                 DiagnosticLog.shared.record("state", self.status.stringValue)
                 peer.send(4,Data(self.status.stringValue.utf8))
             } catch {
@@ -472,7 +651,7 @@ final class HostApp: NSObject, NSApplicationDelegate {
         recentDiagnostics.append("Capture authorization: \(error.domain) \(error.code) · \(error.localizedDescription)")
         peer.send(4,Data("Host is waiting for Screen Recording permission. Keep Viewer connected; enable permission and click Retry capture on Host.".utf8))
     }
-    func stop(message: String = "Stopped. Your virtual display has been released.") {
+    func stop(message: String = "Stopped. Your virtual display has been released.", reconnect: Bool = true) {
         DiagnosticLog.shared.record("state", message)
         guard !stopping else { return }; stopping = true; button?.isEnabled = false
         retryCaptureButton?.isEnabled = false
@@ -488,9 +667,11 @@ final class HostApp: NSObject, NSApplicationDelegate {
             self.button?.title = "Start hosting"; self.button?.isEnabled = true; self.profiles.isEnabled = true; self.stopping = false
             self.startingCapture = false; self.waitingForPermission = false
             self.pairingMode.isEnabled = true; self.pairingModeChanged()
+            self.refreshHome()
+            if reconnect && self.reconnectEnabled && !self.quitting { DispatchQueue.main.asyncAfter(deadline:.now()+0.6) { [weak self] in self?.start() } }
         }
     }
-    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
-    func applicationWillTerminate(_ notification: Notification) { listener?.cancel(); link?.cancel(); startup?.cancel(); capture = nil }
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { !reconnectEnabled }
+    func applicationWillTerminate(_ notification: Notification) { quitting = true; homeTimer?.invalidate(); tunnel?.stop(); listener?.cancel(); link?.cancel(); startup?.cancel(); capture = nil }
 }
 #endif

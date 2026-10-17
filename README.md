@@ -1,74 +1,61 @@
-# RetinaLink 0.2.10
+# RetinaLink 0.3.0
 
-RetinaLink extends a Mac Studio desktop to the native 5120 × 2880 panel of a 2014 5K iMac over an IP network. Host requires Apple silicon and macOS 13+. Viewer includes Intel macOS 10.15+ and Apple silicon macOS 11+ binaries. The tested receiver is Big Sur 11.7.8 with an AMD Radeon R9 M290X.
+Turn a Retina iMac into an unattended second display, with setup and daily controls on the main Mac. Host installs Viewer over an authenticated SSH connection, establishes saved device trust, and manages its display connection automatically. Viewer stays fullscreen, shows a quiet standby screen when disconnected, and reconnects without a mouse, keyboard, pairing code or Connect button on the iMac.
 
-**The receiver is preserving frames that its Metal callbacks incorrectly mark with zero or repeated presentation timestamps. A separate Instruments display trace retained all 887 interior app frames, at 59.05 updates/s in that profiled interval. Stable native 5K60 across desktop workloads remains unresolved because genuine upstream timing gaps remain.** See `VALIDATION.md` for the display/callback comparison, rejected pacing experiments and final checks.
+Host requires Apple silicon and macOS 13+. Viewer supports Intel macOS Catalina 10.15+ and Apple silicon macOS 11+. The current test receiver is a Late-2014 5K iMac on Big Sur 11.7.8 / AMD Radeon R9 M290X. One Viewer is supported at a time.
 
-Final build-38 SSH tests complete **59.97–59.98 updates/s** in two native-5K scrolling workloads, with no credit skips or coalesced captures. Native-window motion averages **59.15 GPU-completed updates/s**, with some gaps already at capture. These are completed-update rates, not independently measured physical display FPS.
+## Set up from Host
 
-## Changes in 0.2.10 build 38
+1. Put **RetinaLink Host.app** in Applications and open it on the main Mac. The compatible Viewer installer is inside Host; there is no separate Viewer download to find.
+2. Choose **Add Display**. Select a nearby Mac or enter the iMac’s local hostname/IP address and its account’s short username.
+3. If this is a new iMac installation, enable **Remote Login** in its Sharing preferences once. RetinaLink cannot enable a remote-access service on an inaccessible Mac. All subsequent RetinaLink setup is driven from Host. Enter any requested SSH password or key passphrase in the native dialog on the main Mac; RetinaLink does not save it.
+4. Setup checks macOS compatibility and FileVault before installing. Read the restart explanation and choose startup preferences. **Set Up Display** copies and verifies Viewer, saves device credentials in Keychain, installs the selected per-user login agents and starts Viewer fullscreen.
+5. Allow Screen Recording for Host if macOS asks. Viewer does not need screen-capture permission. Arrange the extended desktop from **Arrange Displays** on Host.
 
-- When all transfer credits are busy, Host retains the latest pending capture and resumes on acknowledgement. It no longer throws that image away and waits for another capture. This also preserves the final changed image when the desktop becomes static; retention remains bounded to one replaceable pending image.
-- Diagnostics separate GPU-completed updates from **API presentation timing**. Unique timestamp and positive callback rates are labeled as API metadata rather than physical display FPS. Zero/repeated timestamps are reported as timing anomalies; they do not prove a displayed frame was lost on this iMac.
-- The capture texture's Core Video wrapper stays alive until GPU completion, as required by Core Video. This is ownership hardening, not a measured FPS gain.
-- Optional physical refresh-clock traces expose an approximately five-second refresh-prediction correction cycle associated with callback anomalies. An independent Metal System Trace shows individual display intervals for zero-timestamp frames and separate intervals for repeated-timestamp pairs.
-- Single-presentation, timed-refresh and submission-pacing experiments did not establish a useful production improvement. They remain disabled; normal operation uses native vsynced presentation and three bounded frames in flight.
+Normal installation does not create disks, volumes, partitions or another macOS installation. It does not change FileVault, account passwords, automatic login, screen locking, SSH server settings, SIP, Gatekeeper or system trust settings. Apps are installed for the current user; no root daemon is installed.
 
-The prior coalesced BC7 uploads and write-combined staging improvements are retained. Their isolated GPU/CPU gains are independent of this presentation investigation. No interpolated or forced duplicate images are inserted to increase counters.
+The current stable app paths are `~/Applications/RetinaLink Host.app` on the Studio and `~/Applications/RetinaLink Viewer.app` on the iMac. Installing Host somewhere permanent avoids a login agent pointing into a temporary Downloads directory.
 
-## Changes in 0.2.9 build 32
+## Everyday use
 
-- Adjacent changed BC7 tiles on the same tile row are uploaded as a single rectangle. A full 5K frame uses 23 blits instead of 920. Unchanged holes and row boundaries remain separate, and every compressed pixel byte is preserved.
-- CPU-write-only staging buffers use write-combined memory, and their destination pointer is acquired once per upload. GPU completion still owns staging-buffer reuse; transport remains bounded to three frames.
-- GPU readback regression tests cover the original and coalesced upload paths, both memory modes, all three resolutions, unordered tiles, sparse holes, bottom edges and queued updates.
-- Optional traces also account for resize redraws and bounded presentation-timing experiments. Neither two-drawable nor delayed-presentation experiments established a suitable production gain, so normal vsynced presentation remains the default.
-- Capture timestamp diagnostics retain signed callback/display offsets. Virtual-display timestamps were often ahead of delivery; clamping them to zero had hidden this detail.
-- Additional opt-in, bounded probes isolate buffer holding, source versus copied-surface encoding, capture on/off and standalone iMac presentation. They are disabled in normal use. No experiment that merely increases requested rates or reports GPU completions as presentations is enabled.
+The Host display card contains **Arrange Displays**, **Identify** and **Disconnect/Connect**. Disconnect pauses the display while preserving trust. Connect resumes it without any Viewer input. Closing the paired Host’s window leaves it running in the menu bar. **Connection Details** contains diagnostics and **Forget Display**, which removes pairing on both reachable Macs and removes Viewer automatic startup. An unreachable iMac is never reported as definitely FileVault-locked: it may be asleep, offline, or waiting at a sign-in screen.
 
-The lossless parallel packet format from 0.2.8 is retained, with legacy-peer fallback. See the preceding release for its packing comparison.
+Viewer has a borderless native-resolution window. On connection loss, it replaces the previous image with a fullscreen standby screen rather than closing the window or reopening setup controls. It retries automatically. After a crash, its user login agent restarts it. Explicitly quitting normally is respected; a subsequent login starts it again if startup is enabled. Local maintenance and diagnostics are available from its application menu.
 
-The native capture clock, five-surface ScreenCaptureKit pool, bounded latest-frame mailbox and negotiated three-frame transport limit from 0.2.7 remain. BC7 tile bytes, native resolution, encrypted pairing and the default vsynced rendering policy are preserved. Physical-display vsync remains enabled; the source-vsync and deferred-presentation experiments are diagnostic options only.
+Host owns the encrypted SSH tunnel and recreates it with a saved, restricted key when needed. There is no routine shell launcher, IP field or route selector on Viewer. The tunnel entrance is iMac loopback; the underlying image traffic still travels over the network. The legacy direct transport remains for compatibility/testing, but is not the new setup experience.
 
-## Use on these two Macs
+## FileVault and dedicated-display setup
 
-The installed iMac Viewer is `~/Applications/RetinaLink-0.2.10/RetinaLink Viewer.app`. The Studio Host is in the supplied `RetinaLink-0.2.10` folder. Use **RetinaLink SSH Tunnel.command** from the parent outputs folder to start the tunnel and apps. It reuses the existing SSH session when available. If SSH needs a password, enter it locally in Terminal.
+FileVault is inspected, never changed. On older Intel iMacs, a FileVault-locked startup disk must be unlocked before Viewer or ordinary SSH can run. Login agents start **after a graphical sign-in**, not before FileVault. Selecting dedicated display mode does not bypass that requirement.
 
-The current tunnel connects the iMac's `127.0.0.1:58473` to the Studio Host. Viewer uses **127.0.0.1** and **Automatic** networking, with the existing five-digit code. The app's “Local test” path label describes the tunnel entrance; traffic still crosses the Ethernet LAN. The tunnel is a workaround for the measured direct transport slowdown on this setup, not a claim that every network needs SSH.
+For a retired iMac with FileVault already off, **Dedicated Display Guide** explains how its owner may configure automatic login for a non-administrator display account and review its sleep/lock policy. Anyone with physical access can use an automatically logged-in account, so it should hold no personal files. The guide can open the iMac’s Users & Groups preferences through SSH and open Screen Sharing on Host; the owner enters any account password into macOS itself. Company policy may prohibit this configuration.
 
-The helper starts Host with `--autostart` and Viewer with `--autoconnect --fullscreen`. It does not replace existing running copies. If an app is already open but manually stopped, use its Start hosting or Connect button. Explicit Disconnect or closing Viewer's display stops automatic retries; reopening via the helper restores automatic mode.
+With FileVault on or its status unknown, the automatic-login instructions are replaced by an explanation of the boot limitation. No automatic-login, Keychain-lock or encryption settings are silently changed. A locked login Keychain is reported rather than triggering repeated background authorization dialogs.
 
-Keep the iMac logged in and unlocked. Its default Retina scale, normally “looks like 2560 × 1440”, gives a 5120 × 2880 fullscreen drawable. Escape exits fullscreen. Move windows using the Studio's keyboard and mouse. Audio and input forwarding are not included.
+## Pairing and installation security
 
-## Ordinary network connections
+Enrollment uses an already authenticated SSH session. The native Host dialog asks the owner to verify a new SSH host fingerprint; changed host keys are rejected. The normal display tunnel pins the iMac’s public host key fetched through that authenticated connection. Discovery alone cannot claim a device or replace an existing owner.
 
-Both Macs may use the same wired LAN, Wi-Fi, or a reachable Thunderbolt Bridge IP link. Host listens on TCP 58473 and advertises `_retinalink._tcp` through Bonjour. If discovery fails, enter the Host's IP manually. A plain USB cable does not inherently create this network link. Thunderbolt hardware has not been tested here.
+Each enrollment generates a random 128-bit stream credential and a separate Ed25519 tunnel key. Persistent secrets are stored in the respective login Keychains. An owner-only temporary enrollment request is sent through SSH, consumed by a short-lived Viewer helper in the signed-in GUI session, and removed before saving trust. Pairing secrets are not placed in command arguments, diagnostics, preferences or package artifacts.
 
-Profiles are native 5K target 60 fps, native 5K target 30 fps, and an explicit 2560 × 1440 target-30 Wi-Fi preview. There is no silent downscaling. A target is not a measured delivered frame rate.
+The iMac’s `authorized_keys` retains unrelated entries. RetinaLink’s marked key has a forced failing command, no PTY/agent/X11 access, and forwarding restricted to the loopback display endpoint. It cannot open a remote shell. Management operations such as installation and forgetting use the owner's separate authenticated SSH session. Replacing another Host’s binding requires an explicit replacement choice.
 
-Pairing modes are a saved five-digit code, a per-launch long random code, and explicit unencrypted no-code testing. Use the same mode on both ends. Short codes are convenient but easy to guess; long codes provide stronger pairing. There is no automatic downgrade after an authentication failure. The current setup remains encrypted.
+**Development signing limitation:** this checkout currently has no Developer ID signing identity. Ad-hoc executables have hash-specific Keychain access rules, so development builds use a build-specific trust namespace and must be re-enrolled from Host when upgraded. This avoids automatic Keychain approval requests for changed unsigned code. A distribution build signed consistently with `RETINALINK_SIGN_IDENTITY` uses a stable namespace. Developer ID signing/notarization is still needed before presenting this as a finished consumer distribution; this build is not notarized.
 
-## Diagnostics and remote testing
+Screen Recording approval can also remain attached to an older ad-hoc executable even when System Settings shows its switch enabled. If macOS reports a code-requirement mismatch, remove the old RetinaLink Host entry and add the permanently installed app again through System Settings. The app does not reset or edit macOS's privacy database. Keep the approved executable unchanged during testing.
 
-Timing snapshots are saved automatically in `~/Library/Logs/RetinaLink/Host.json` and `Viewer.json` on their respective Macs. They contain at most 120 records, with restricted file permissions. They contain no screen images or pairing codes. `--diagnostics-path /absolute/file.json` selects an alternate location. During development, the Studio uses the workspace's `work/host-live.json`.
+## Display quality and performance
 
-`--trace-path /absolute/file.jsonl` enables a separate metadata trace, capped at 250,000 events and written in batches. It contains no screen images, pairing codes, packet payloads or window titles. Leave it off for ordinary use. See `Tools/README.md` for automated tests.
+The default remains native **5120 × 2880, target 60 updates/s**, bounded to three transfer credits, three drawables and normal vsynced Metal presentation. No interpolation, forced duplicates or silent downscaling is used. BC7 texture compression is lossy; native resolution does not make this a reference-colour pipeline. Audio, clipboard sync and remote input are not implemented.
 
-An SSH reader can fetch these logs without UI automation or clipboard copying. Copy diagnostics remains available for convenience. Useful launch options are `--autostart` for Host and `--autoconnect --fullscreen` for Viewer. Existing saved pairing settings are reused.
+The existing coalesced tile upload, write-combined staging and pending-capture retention improvements remain. The private CGVirtualDisplay API remains an OS-compatibility risk. Stable physical 5K60 across all workloads and direct-monitor-equivalent latency have not been established. See `VALIDATION.md` for the current release checks and preserved 0.2.10 timing evidence.
 
-- Delivered updates count GPU-completion acknowledgements.
-- Rendered updates count completed Viewer GPU commands.
-- Presentation timing reports unique API timestamps and positive callbacks separately from GPU completions. These driver timestamps can repeat or be zero for displayed frames on this iMac; neither API rate is physical display FPS. A separate system display trace is needed to investigate actual retained frames.
-- ACK time includes transport and receiver work; it is not input-to-photon latency.
-- Capture reports complete samples, unchanged encoded images, credit-limit skips and inactive samples. A static desktop should not send 60 duplicate images per second.
+GPU-completed updates, capture production, API presentation timestamps and actual display intervals are different measurements. On this AMD/Big Sur receiver, zero/repeated Metal presentation timestamps can describe frames that the driver actually displayed. API timestamp rates are not physical FPS.
 
-## Permissions and limits
+## Build and test
 
-Host uses ScreenCaptureKit for actual capture authorization. If denied, it keeps the connection and offers Retry capture after permission is granted. If macOS requires a restart, reopen the same Host app. Builds are ad-hoc signed and not notarized, so updates can require app-specific reauthorization. The code does not change system privacy settings.
+Run `bash build.sh` with full Xcode installed. `RETINALINK_BUILD_DIR` chooses the output directory; `RETINALINK_SDK` selects a compatible SDK; `RETINALINK_SIGN_IDENTITY` selects a signing identity (default ad-hoc). Host is arm64 and contains the universal Intel/Apple-silicon Viewer archive. The native icon is included as `Resources/AppIcon.icns`; `Tools/MakeIcon.swift` preserves its vector drawing source.
 
-BC7 texture compression is lossy despite native resolution. Fine coloured detail and gradients can change; this is not a reference-colour display pipeline. Fullscreen motion costs more than a small moving window. One Viewer is supported. There is no audio, clipboard sync, separate cursor channel or remote input. Protected content and login/FileVault screens are not provided. The virtual display uses the undocumented CGVirtualDisplay API and may break after macOS changes.
+Both executables support `--self-test`. Host supports `--permission-test` for simulated permission-denial recovery. `Tools/test_display_setup.py` drives the actual Host setup controller and app-owned test controls, then reads state over SSH. It exercises enrollment, fullscreen standby, Host pause/resume, app crash recovery, login-agent startup, pairing removal/re-enrollment and tunnel repair. It does not reboot or change login/encryption policy. See `Tools/README.md` and `VALIDATION.md` for the tested boundaries.
 
-## Build and verify
-
-Run `bash build.sh` with full Xcode installed. `RETINALINK_BUILD_DIR` chooses the output directory and `RETINALINK_SDK` selects a compatible SDK. `RETINALINK_SIGN_IDENTITY` can select an existing signing identity; the default is ad-hoc signing. Build products include Host arm64 and Viewer universal arm64/x86_64.
-
-Run the app executable with `--self-test` for authentication, framing, GPU upload/readback, packet ownership and codec/layout regression checks. Host also supports `--permission-test` for simulated authorization-denial recovery and `--transport-test` for large-message integrity tests. These correctness tests do not prove desktop frame rate. The physical-iMac tests and their exclusions are documented in `VALIDATION.md`.
+Metadata diagnostics are bounded and saved in `~/Library/Logs/RetinaLink/Host.json` / `Viewer.json`; Viewer also writes its current appliance state to `Viewer-ui.json`. They contain no pairing secrets or captured pixels. Frame traces and UI test controls are opt-in. Interface images in validation are rendered from the app’s own view hierarchy; they do not use a UI capture bridge or capture other applications.

@@ -17,6 +17,7 @@ func pump(until condition: () -> Bool, timeout: Double = 10) throws {
     try check(condition(),"Timed out waiting for network test")
 }
 func runSelfTests() throws {
+    try runSetupTests()
     let legacy = try JSONDecoder().decode(Hello.self,from:Data("{\"version\":1,\"bc7\":true,\"name\":\"legacy\"}".utf8))
     try check(try legacy.frameLimit()==2,"Legacy Viewer must retain two credits")
     let modern = Hello(version:1,bc7:true,name:"new",maxFramesInFlight:3,chunkedPacking:true)
@@ -99,6 +100,35 @@ func runSelfTests() throws {
     if let device = MTLCreateSystemDefaultDevice() { print("GPU: \(device.name); BC textures: \(supportsBC(device))") }
     #endif
     print("ALL SELF-TESTS PASSED")
+}
+
+func runSetupTests() throws {
+    try check(FileVaultState(output:"FileVault is On.") == .on,"FileVault on detection")
+    try check(FileVaultState(output:"FileVault is Off.") == .off,"FileVault off detection")
+    try check(FileVaultState(output:"permission denied") == .unknown,"Unknown FileVault must not be called off")
+    try check(!FileVaultState.on.allowsAutomaticLoginGuide && !FileVaultState.unknown.allowsAutomaticLoginGuide && FileVaultState.off.allowsAutomaticLoginGuide,"Automatic login guidance must respect encryption")
+    try check(FileVaultState.on.setupMessage.contains("unlocked") && FileVaultState.on.setupMessage.contains("unchanged"),"Encrypted startup restriction must be shown during setup")
+    for address in ["-oProxyCommand=evil","host;touch x","host/name","a\nb","$(id)","", "host name"] {
+        try check(!DeviceBinding.validAddress(address),"Unsafe address accepted")
+    }
+    for username in ["-root","root;id","user@host","a\nb",""] { try check(!DeviceBinding.validUsername(username),"Unsafe username accepted") }
+    try check(DeviceBinding.validAddress("Old-iMac.local") && DeviceBinding.validAddress("10.28.114.22") && DeviceBinding.validUsername("display_user"),"Normal setup targets rejected")
+    let binding = DeviceBinding(hostID:UUID().uuidString,hostName:"Studio",viewerName:"Old iMac",address:"imac.local",username:NSUserName(),dedicatedDisplay:true,viewerStartup:true,hostStartup:true,fileVault:.on,automaticLoginConfigured:false,enrolledAt:Date())
+    try binding.validate()
+    let key = "ssh-ed25519 "+Data(repeating:0,count:51).base64EncodedString()+" RetinaLink-tunnel"
+    let request = EnrollmentRequest(binding:binding,credential:String(repeating:"A",count:32),tunnelPublicKey:key)
+    try request.validate()
+    try expectInvalid { try EnrollmentRequest(binding:binding,credential:"12345",tunnelPublicKey:key).validate() }
+    try expectInvalid { try EnrollmentRequest(binding:binding,credential:String(repeating:"A",count:32),tunnelPublicKey:key+"\nssh-rsa injected").validate() }
+    let agent = StartupAgent.document(executable:"/Applications/RetinaLink Viewer.app/Contents/MacOS/RetinaLink",role:"Viewer",arguments:["--appliance"])
+    try check(agent["LimitLoadToSessionType"] as? String == "Aqua" && agent["RunAtLoad"] as? Bool == true && agent["UserName"] == nil,"Viewer startup must run only in the signed-in user’s GUI session")
+    let arguments = agent["ProgramArguments"] as? [String] ?? []
+    try check(arguments.count == 2 && arguments[1] == "--appliance","Startup must not contain credentials or experimental rendering flags")
+    #if !HOST
+    try expectInvalid { _ = try ViewerEnrollment.enroll(Data("{}".utf8)) }
+    try expectInvalid { _ = try ViewerEnrollment.enroll(Data(repeating:0,count:16_385)) }
+    #endif
+    print("PASS: FileVault-aware setup, fail-closed unknown status, validated enrollment, command-safe targets and user-session-only automatic startup")
 }
 
 func testRefreshSlotScheduler() throws {
