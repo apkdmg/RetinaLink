@@ -1,3 +1,131 @@
+# RetinaLink 0.2.10 build 38 — validation, 17 October 2026
+
+## Outcome and corrected interpretation
+
+**Strictly stable native 5120 × 2880 at 60 new updates/s has not been achieved. A driver trace now shows that the apparent post-GPU losses inferred from Metal presentation callbacks were not actual missing Viewer frames in that recorded interval.** This release retains the newest pending capture when frame credits are full, adds bounded diagnostics for API timestamp anomalies and hardens the diagnostic clock lifetime. The new pacing experiments do not establish a throughput gain. Normal operation retains native Metal presentation, three drawables and vsync; clock probes, frame traces, the single-presentation gate and pacing plans are off by default.
+
+All runs in this investigation used SSH for installation, test control and evidence collection. The agent's UI capture helper remained off, and Screen Sharing remained connected. The machines are the same M2 Max Studio and Late-2014 Retina iMac / Radeon R9 M290X on Big Sur. Native dimensions, encryption and the existing connection route were retained. No thermal warning was observed. These conditions do not establish an otherwise idle or exclusive compositor environment. No camera-based physical frame-identity or input-to-photon measurement was made.
+
+## Driver display evidence supersedes callback-based loss claims
+
+A separate 15-second Metal System Trace on the actual iMac records 890 application command buffers and maps all 890 uniquely to Viewer GPU-commit sequences. The relationship is `Viewer sequence = Instruments application Frame + 11098`. The direct same-machine monotonic-clock mapping has residuals of approximately −39 to +4 microseconds. This joins actual application frame identities, rather than assuming the panel's roughly 60-Hz swap activity means 60 new application frames.
+
+The completed display-surface intervals identify **887 consecutive application frames, Frame 1 through Frame 887, with no missing or repeated interior application frame ID**. Their rate over the labelled interval is **59.051 application display intervals/s**. The final three application command buffers lie at the recording boundary and do not have completed labelled intervals in that table. Within the 887 retained frames:
+
+| Measurement for the same mapped frames | Count |
+|---|---:|
+| Driver-recorded distinct application display intervals | 887 |
+| Positive Metal presentation callbacks | 868 |
+| Zero-timestamp Metal presentation callbacks | 19 |
+| Distinct positive Metal timestamps | 852 |
+| Repeated-positive-timestamp pairs | 16 |
+
+Every one of the 19 zero-timestamp callbacks maps to a distinct driver-recorded display interval. Every one of the 16 repeated-timestamp pairs maps to two different display-surface intervals, normally one refresh apart. For example, sequences 11338 and 11339 report the same positive timestamp, but the driver records their frames 240 and 241 at **4.401455917 s and 4.418138333 s**, on different output surfaces. Sequence 11345 reports zero, while its frame 247 has a recorded interval starting at **4.518157 s** and lasting about 16.70 ms.
+
+Thus the corresponding **852 distinct API timestamps, 56.721/s, undercount the 887 recorded application display intervals**. Counting only positive callbacks also undercounts them. Deduplicating timestamps is useful for describing API behaviour, but is not a physical-FPS correction on this AMD/Big Sur path. The Viewer therefore labels this diagnostic **“Presentation timing (API): unique timestamps/s, positive callbacks/s”**, with zero, repeated, reordered, stale and invalid callback counts. GPU completion/acknowledgement remains a separate statistic. Counter tests verify bounded and orderly anomaly accounting, not physical display throughput.
+
+The driver trace is stronger evidence of application frame retention than these callback timestamps. It still is not independent camera-based physical scanout or input-to-photon proof. It was collected during profiling and is kept separate from final untraced performance measurements.
+
+## Genuine retained-frame intervals and capture gaps
+
+The driver trace contains **14 intervals of approximately 33 ms** in which one application frame remains on the display for an extra refresh. These are genuine recorded holds even though no interior application frame ID is lost. Their stage-by-stage mapping is preserved in `metal-sequence-map-analysis.json`, separately from the 19 zero callbacks and 16 repeated-timestamp pairs.
+
+Five holds have 33 ms gaps between transmitted source images with an intermediate idle callback containing no image. Another has a 67 ms transmitted-image gap, but ScreenCaptureKit produced the three intervening images: credit backpressure skipped them while waiting for earlier acknowledgements. Five additional holds already have 23–30 ms gaps at capture callback delivery. Two first show a larger delay downstream: Viewer body-arrival gaps of approximately **33.95 / 59.41 ms**, against Host packed-frame gaps of **18.11 / 11.62 ms**. One hold has otherwise ordinary approximately 17 ms stage spacing. These identify where delays first appear; they do not prove the internal compositor latch deadline or a single cause for every hold. GPU readiness before the next physical vsync does not prove that an earlier compositor deadline was met.
+
+Source image production can vary independently of the receiver. Requested 60 Hz and source movement calls are not proof of 60 new composited images. Idle capture callbacks contain no missed image to recover. Exact attribution of the remaining source/capture gaps remains unresolved. No interpolated or forced duplicate frames are inserted to inflate output rates.
+
+## Host credit retention and final-image correctness
+
+The genuine hold at Instruments frame 736 exposed a recoverable loss in the old Host credit path: ScreenCaptureKit produced three complete images, but full frame credits caused the Host to consume and discard them. If the last changed image of a desktop update arrived in that state, the old path could discard the final image and have no later capture to trigger a correction.
+
+Build 38 checks available credit **before consuming the capture mailbox**. When credits are full it parks the drain and retains one replaceable pending image. New captures replace that single pending image; the first acknowledgement that makes room schedules one asynchronous drain. This flushes the final pending image even if no new capture follows the acknowledgement. There is no polling, no unbounded queue and no increase in the normal three-frame credit limit. The old behaviour remains available only as the diagnostic `--drop-credit-frames` control.
+
+Host build-38 tests pass for bounded retention/replacement, final-image flush without another capture, one ACK wake, no oversend, credit limits and stop/restart cleanup, including memory/ownership checks. These establish the state and lifetime rules; they are not a physical-FPS measurement.
+
+Three 45-second controls deliberately force **one frame credit**, rather than the normal three, to exercise saturation:
+
+| Forced one-credit policy | GPU completions/s |
+|---|---:|
+| Old discard path A | 29.97 |
+| Retain newest pending image B | 35.37 |
+| Old discard path C | 29.95 |
+
+Retention improves this constrained workload by resuming when the ACK arrives instead of waiting for a later capture event. It still coalesces older captures into the newest pending image, at approximately 24 replaced captures/s in B. Zero credit-discard events does **not** mean zero capture coalescing or that every produced image is transmitted. This result does not establish stable 60 fps or a general throughput improvement with the default three credits.
+
+B also contains an approximately two-second pause in complete-capture callbacks around test +16 s. During that pause the Host has zero frames in flight and no pending credit-held image; the source control timer remains alive. This rules out a parked credit wait, but does not isolate capture delivery from actual compositor image production or identify the internal OS cause. A second 45-second retention run produces **38.32 GPU completions/s** from **59.97 complete captures/s**, with a 19.89 ms mean ACK cycle. That pause does not recur. It records 1,455 credit waits and 1,455 ACK resumes, no credit-discard events, and 824 coalesced captures in the 38 settled samples. Both old-path controls produce approximately 30 completions/s. This confirms a useful improvement under deliberately restricted credit pressure, not a general 28% speed gain or an absence of all capture pauses.
+
+## Controlled pacing experiments: API timing rates, not physical FPS
+
+The following prototype comparisons use **distinct positive API timestamps/s**, not driver-recorded application display intervals or physical FPS. Their callback anomalies are now known to undercount actual retained application frames in the profiled interval above. The settled window excludes five seconds after each phase begins and its final two seconds, intersected with the source test's settled interval. Source/capture production also varies between phases.
+
+Build 33 compares native presentation, a single outstanding presentation, and a native control:
+
+| Policy | Distinct positive API timestamps/s | Zero callbacks | Repeated timestamps |
+|---|---:|---:|---:|
+| Native A | 55.83 | 61 | 55 |
+| Single pending presentation B | 29.99 | 0 | 0 |
+| Native C | 52.11 | 61 | 69 |
+
+The single-presentation gate removes API anomalies at half rate. Waiting serially for a callback arriving about two refresh intervals after submission constrains throughput. Queue depth and rate change together, so this does not isolate which change removes the anomalies. The gate is not enabled in production.
+
+Build 34 tests native/timed-refresh/native in one continuous stream, retaining normal in-flight GPU credits:
+
+| Policy | Settled duration | GPU completions/s | Distinct positive API timestamps/s | API timestamp/GPU fraction |
+|---|---:|---:|---:|---:|
+| Native A | 22.55 s | 60.00 | 58.84 | 98.07% |
+| Refresh-anchored timed B | 22.99 s | 54.51 | 52.98 | 97.19% |
+| Native C | 28.69 s | 56.84 | 55.10 | 96.94% |
+
+All timed frames finish GPU work before their requested target, with a minimum reported margin of 6.03 ms. Nevertheless, 93 of 1,241 positive timestamps appear approximately one refresh interval before the requested target, 866 in the predicted slot and 282 one slot afterward. The earliest reported timestamp is 14.04 ms before the target. Together with the driver frame mapping, this is evidence of API/driver timing limitations, not evidence that those frames physically appeared before the requested time. No useful throughput gain is established.
+
+Build 35 paces CPU command submission against predicted refresh phases while retaining the native presentation helper. Submission deadlines are analysed separately from presentation targets:
+
+| Policy | GPU completions/s | Distinct positive API timestamps/s | Mean Host ACK cycle |
+|---|---:|---:|---:|
+| Native A | 58.10 | 55.87 | 24.27 ms |
+| Refresh-anchored submission B | 56.60 | 54.60 | 36.93 ms |
+| Native C | 59.49 | 57.84 | 26.20 ms |
+
+Submission pacing increases acknowledgement latency without establishing a throughput gain. All three experimental pacing policies are rejected as production defaults; native presentation is retained.
+
+## Five-second timestamp correlation
+
+The build-33 clock trace associates the API anomalies with a periodic CVDisplayLink output-prediction phase. Positive drawable timestamps exceed the nearest predicted output time by an offset that ramps from approximately zero to 0.82 ms over five seconds, then resets. Thirteen settled prediction corrections occur exactly **300 callbacks apart**, averaging **5.00138 seconds**. Raw CV host ticks show the same corrections, so translation to the Viewer clock does not introduce them.
+
+All 61 zero-timestamp frames and all 110 frames belonging to repeated-timestamp pairs in that baseline occur near the tail of the sawtooth. GPU-end/command-commit phase distributions overlap normal frames. The source animation's four/eight-second cycle and a simple source/panel frequency beat do not explain the five-second pattern. Actual layer metadata confirms `presentsWithTransaction == false`, vsync enabled, three drawables, opacity enabled and the expected backing layer; redundant resize redraws do not explain the anomalies.
+
+This identifies a timestamp/clock-prediction correlation, **not the cause of physical presentation drops**. The subsequent driver trace demonstrates that the zero/repeated callback inference was wrong for its mapped frames. The internal OS bookkeeping behind these timestamp anomalies remains unresolved.
+
+## Profiling and final release checks
+
+Earlier profiler attempts failed while saving with POSIX error 24 because the profiler child inherited a soft file-descriptor limit of 256. Raising only that child process's limit to 8192 allowed the authorized trace to save. No system permissions, security settings or persistent user limit were changed. Failed saves are not used as performance evidence.
+
+The CVDisplayLink wrapper retains callback state independently of its owner, disables that state before stopping, and avoids an unretained callback context or owner/link retain cycle. The capture encoder also retains its Core Video texture wrapper until the GPU command finishes. These are ownership/lifetime corrections, not isolated performance-gain claims. Presentation-counter and scheduler tests cover ordering, bounds and deadline rules as diagnostic correctness checks.
+
+The earlier build-37 untraced controls, with native presentation and the normal three credits, measured **59.98 complete captures/s and 59.93 GPU-delivered updates/s** for the GPU scrolling source, and **59.62 / 59.62 per second** for native-window motion. These are source/capture and GPU-completion rates, not physical presentation rates; they do not establish that every display refresh carried a new application frame.
+
+Both final installed executables are **0.2.10 build 38**. The following untraced tests use normal three-frame credits, native presentation, three drawables and vsync. Clock/pacing probes, the legacy credit-discard control and frame tracing are off. Each aggregate excludes the first five and final two seconds; values are means of one-second snapshots. Host and Viewer sampling boundaries differ slightly, so small rate differences are not evidence of frame loss.
+
+| Final build-38 workload | Duration | Complete captures/s | Host delivered/s | Viewer GPU completions/s | Mean ACK cycle | Mean Mbps |
+|---|---:|---:|---:|---:|---:|---:|
+| GPU scrolling source | 90 s | 60.00 | 59.97 | 59.97 | 34.52 ms | 127.04 |
+| Native AppKit window motion | 45 s | 59.13 | 59.13 | 59.15 | 11.75 ms | 144.83 |
+| Core Animation bitmap-text scroll | 45 s | 60.01 | 59.98 | 59.98 | 33.92 ms | 482.89 |
+
+All three final workloads have **zero credit skips and zero mailbox coalescing** in the settled samples. GPU scrolling records 1,658 credit waits/resumes, and bitmap-text scrolling records 18; pending captures are recovered before a newer capture replaces them. Window motion records no credit waits. Viewer GPU execution averages 4.01 / 2.68 / 4.12 ms respectively. The GPU scrolling source issues 59.99 draws/s, but source physical presentation is not independently measured. Native-window capture falls to 49.1/s in one one-second sample, so its nearly-60 average does not establish stable cadence. These completion counters are not physical display FPS. A static desktop legitimately sends no unchanged images.
+
+The earlier build-37 GPU-scroll ACK mean is lower than build 38's, while completion throughput is nearly identical. Those separate sessions do not isolate an ACK-latency regression or improvement. No end-to-end latency gain is claimed for credit retention; its final-image correctness fix and constrained-credit advantage are the supported results.
+
+Host build-38 self-tests pass on the Studio, and Viewer build-38 self-tests pass on the actual AMD iMac over SSH. The final Host simulated permission-denial/retry test passes without accessing screen content or changing OS permissions. Both app signatures verify; Host is arm64 and Viewer is universal x86_64/arm64. The installed Viewer executable hash matches the supplied Viewer. The updated SSH launcher passes a smoke test using the existing connection, with both final apps remaining connected and no experimental flags. No test scene, profiler recorder or UI capture helper remains running.
+
+The release includes the exact committed source, Git history bundle, selected timing-only evidence, self-test logs, executable hashes and checksums. Reproduce aggregate results with `python3 Tools/summarize_perf.py final-038-gpu-scroll final-038-native-window final-038-ca-scroll credit-retain-repeat-38` against the preserved `work/perf` directories (or the corresponding evidence folders in the release). The source/capture and occasional downstream timing gaps remain the diagnostic boundary. **Stable 60 new displayed frames/s across workloads and direct-monitor-equivalent latency have not been established.**
+
+---
+
+# Archive — RetinaLink 0.2.9 build 32 evidence
+
+**Historical interpretation warning:** the archived text below preserves its original results. Its positive-callback “presentation fps” values are API observations, not physical FPS. The newer distinct-positive-timestamp rates also are not physical FPS: both measures undercount driver-recorded application display intervals in the mapped AMD/Big Sur trace above. Repeated API timestamps do not prove repeated displayed images, and zero callbacks do not prove missing displayed application frames on this receiver. The new driver evidence supersedes those implications in the archive. Stage-cost and byte-correctness results remain separate from throughput claims.
+
 # RetinaLink 0.2.9 build 32 — validation, 17 October 2026
 
 ## Outcome and limits
