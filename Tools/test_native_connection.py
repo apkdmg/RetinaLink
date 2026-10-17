@@ -21,6 +21,7 @@ p=argparse.ArgumentParser(description=__doc__)
 p.add_argument('--feed',type=Path,required=True);p.add_argument('--socket',type=Path,required=True)
 p.add_argument('--address',required=True);p.add_argument('--user',required=True)
 p.add_argument('--output',type=Path,required=True);p.add_argument('--build',default='55')
+p.add_argument('--restart-baseline-viewer',action='store_true',help='Relaunch the older Viewer once before upgrading; recovery after the update is still tested without intervention')
 a=p.parse_args();a.output.mkdir(parents=True,exist_ok=False)
 control=a.output/'control';control.mkdir(mode=0o700)
 app=Path.home()/'Applications/RetinaLink Host.app'
@@ -78,6 +79,10 @@ try:
  def baseline_connected():
   hs=json.loads(host_ui.read_text());vs=viewer()
   return hs['pid']!=old and hs['streaming'] and hs['time']>=baseline_time and vs['phase']=='streaming' and vs['time']>=baseline_time
+ if a.restart_baseline_viewer:
+  previous=viewer()['pid']
+  remote('command=$(/bin/ps -p '+str(previous)+' -o command=); case "$command" in "$HOME/Applications/RetinaLink Viewer.app/Contents/MacOS/RetinaLink"*) /bin/kill -TERM '+str(previous)+' ;; *) exit 4 ;; esac')
+  time.sleep(1);remote('/usr/bin/open "$HOME/Applications/RetinaLink Viewer.app" --args --appliance')
  wait('baseline Viewer completes fresh authenticated handshake',baseline_connected)
  command('updates-test-feed',url=base)
  wait('Viewer configured with local signed feed',lambda:(u if (u:=json.loads(remote('cat "$HOME/Library/Logs/RetinaLink/Viewer-updates.json"')))['configured'] and u['message']=='Update service is ready.' else None))
@@ -90,9 +95,10 @@ try:
  agent=Path.home()/'Library/LaunchAgents/local.retinalink.host.startup.plist'
  import plistlib
  assert plistlib.loads(agent.read_bytes())['ProgramArguments']==[str(app/'Contents/MacOS/RetinaLink'),'--autostart']
- previous=host()['pid']
+ previous=host()['pid'];recovery_start=time.monotonic()
  run(['/bin/launchctl','kickstart','-k','gui/'+str(os.getuid())+'/local.retinalink.host.startup'])
  wait('normal Host agent restart reconnects directly',lambda:host()['pid']!=previous and is_native())
+ recovery_seconds=time.monotonic()-recovery_start
  # Existing original-account Viewer startup is intentionally disabled by the
  # dedicated-account setup. Test relaunch without altering that preference.
  previous=viewer()['pid']
@@ -101,10 +107,19 @@ try:
  remote('/usr/bin/open "$HOME/Applications/RetinaLink Viewer.app" --args --appliance')
  recovered=wait('Viewer relaunch retains pairing and direct fullscreen reconnection',lambda:(v if (v:=is_native()) and v['pid']!=previous else None))
  assert snapshot()==after;helper_off()
- (a.output/'result.json').write_text(json.dumps({'success':True,'retainedPairing':True,'fileVaultUnchanged':True,'appDisplaySSHAbsent':True,'viewer':recovered,'hostAgentRecovery':True,'viewerRelaunchRecovery':True,'viewerStartupPreferenceUnchanged':True,'uiCaptureHelperOff':True,'systemRemoteLoginDisabledDuringTest':False},indent=2)+'\n')
+ (a.output/'result.json').write_text(json.dumps({'success':True,'baselineViewerRelaunched':a.restart_baseline_viewer,'hostRecoverySeconds':round(recovery_seconds,2),'retainedPairing':True,'fileVaultUnchanged':True,'appDisplaySSHAbsent':True,'viewer':recovered,'hostAgentRecovery':True,'viewerRelaunchRecovery':True,'viewerStartupPreferenceUnchanged':True,'uiCaptureHelperOff':True,'systemRemoteLoginDisabledDuringTest':False},indent=2)+'\n')
 finally:
  subprocess.run(['/usr/bin/defaults','delete','local.retinalink.Host','RetinaLink.localUpdateTestBaseURL'],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
  remote('/usr/bin/defaults delete local.retinalink.Viewer RetinaLink.localUpdateTestBaseURL 2>/dev/null || true')
  if forwarded:subprocess.run(['/usr/bin/ssh','-S',str(a.socket.resolve()),'-O','cancel','-R',f'127.0.0.1:{port}:127.0.0.1:{port}','-l',a.user,a.address],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
  server.shutdown()
+ # A failed check must not leave the production Host in test mode or its
+ # existing startup agent unloaded. Stop only this run's explicit test process.
+ try:
+  pid=host()['pid'];args=run(['/bin/ps','-p',pid,'-o','command='],capture_output=True,text=True).stdout
+  if str(control.resolve()) in args and args.startswith(str(app/'Contents/MacOS/RetinaLink')): os.kill(pid,signal.SIGTERM)
+ except (OSError,ValueError,KeyError,subprocess.SubprocessError):pass
+ agent=Path.home()/'Library/LaunchAgents/local.retinalink.host.startup.plist'
+ subprocess.run(['/bin/launchctl','bootstrap','gui/'+str(os.getuid()),str(agent)],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+ subprocess.run(['/bin/launchctl','kickstart','gui/'+str(os.getuid())+'/local.retinalink.host.startup'],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
 print('PASS: native installed update, direct streaming, retained trust, normal Host recovery and Viewer relaunch; FileVault unchanged')

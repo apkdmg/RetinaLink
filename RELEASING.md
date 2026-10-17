@@ -1,6 +1,6 @@
 # Developer ID releases
 
-The latest release candidate is **0.6.0 build 53**, with one-time Viewer installation, local approval on both displays and direct authenticated TLS. Host/Viewer upgrades retain the existing binding and credential. Both apps and both role-specific DMGs are Developer ID signed, Apple-accepted and stapled. Real two-Mac approval/cancellation tests, installed 52→53 migration without an app-owned display SSH tunnel, Host agent restart and Viewer relaunch pass. The dedicated account's protected Viewer update needs separate owner authentication; physical reboot/first-login/wake checks remain deferred. See [NATIVE_CONNECTION.md](NATIVE_CONNECTION.md) and [VALIDATION.md](VALIDATION.md).
+The latest release candidate is **0.6.2 build 55**, with one-time Viewer installation, local approval on both displays, interrupted-setup recovery and direct authenticated TLS. Real two-Mac approval/cancellation/resume tests, installed Host 54→55 and Viewer 53→55 signed updates, idle Host agent restart and Viewer relaunch pass with unchanged pairing and FileVault. Idle Host restart recovered without Viewer intervention in 27.68 seconds in this trial. Both apps and both separate Host/Viewer DMGs are Developer ID signed, Apple-accepted and stapled. The protected dedicated account has compatible native Viewer 0.6.0 build 53, updated with owner authentication; physical reboot/first-login/wake checks remain deferred. See [NATIVE_CONNECTION.md](NATIVE_CONNECTION.md) and [VALIDATION.md](VALIDATION.md).
 
 ## Build the consumer DMG
 
@@ -10,13 +10,13 @@ After `release.py advance` has completed both app tickets and embedded the stapl
 python3 -m venv work/dmg-tools
 work/dmg-tools/bin/python -m pip install -r Tools/dmg-requirements.txt
 work/dmg-tools/bin/python Tools/package_dmg.py prepare \
-  --release work/release-0.6.0-build53 --directory work/dmg-0.6.0-build53
+  --release work/release-0.6.2-build55 --directory work/dmg-0.6.2-build55
 work/dmg-tools/bin/python Tools/package_dmg.py advance \
-  --directory work/dmg-0.6.0-build53 --output outputs/RetinaLink-0.6.0.dmg
+  --directory work/dmg-0.6.2-build55 --output outputs/RetinaLink-0.6.2.dmg
 work/dmg-tools/bin/python Tools/package_dmg.py prepare --role Viewer \
-  --release work/release-0.6.0-build53 --directory work/dmg-0.6.0-build53-viewer
+  --release work/release-0.6.2-build55 --directory work/dmg-0.6.2-build55-viewer
 work/dmg-tools/bin/python Tools/package_dmg.py advance \
-  --directory work/dmg-0.6.0-build53-viewer --output outputs/RetinaLink-Viewer-0.6.0.dmg
+  --directory work/dmg-0.6.2-build55-viewer --output outputs/RetinaLink-Viewer-0.6.2.dmg
 ```
 
 `advance` submits once, then returns exit code 3 while Apple processes the DMG. Repeat that command later to check the saved submission; it never rebuilds a submitted image. Upon acceptance it staples and validates the DMG ticket, checks Gatekeeper, verifies the mounted Host and embedded Viewer, checks Finder layout and the Applications symlink, and verifies a disposable copy of Host. The source app signatures, identifiers, pairing namespace and embedded Viewer archive are unchanged. Nothing is installed or launched. Each image includes the offline no-SSH Setup Guide and the unchanged FileVault/restart limitations. The standard flow uses a one-time local Viewer installation; advanced dedicated-account administration remains separate.
