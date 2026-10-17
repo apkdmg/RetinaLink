@@ -36,6 +36,9 @@ func runSelfTests() throws {
     let resumed = rate.take(now:3)
     try check(moving.fps == 60 && moving.mbps == 8 && idle.fps == 0 && idle.mbps == 0 && resumed.fps == 60,"Idle time contaminated the next measurement window")
     print("PASS: active, idle and resumed one-second counter windows")
+    try testPresentationCounter()
+    try testRefreshSlotScheduler()
+    try testRefreshSubmissionScheduler()
     let statistics=ViewerStatistics()
     func measured(_ delay:Double)->RenderTiming {
         RenderTiming(sequence:1,width:5120,height:2880,queueMS:0,unpackMS:1,uploadMS:1,drawableMS:0,gpuMS:4,totalMS:delay+6,submissionMS:delay,callbackMS:0.1,presentMS:0.02)
@@ -90,11 +93,141 @@ func runSelfTests() throws {
     try testGPU()
     try testFlatBlockFastPath()
     try testCaptureMailbox()
+    try testCaptureCreditRetention()
     try testCaptureProbe()
     #else
     if let device = MTLCreateSystemDefaultDevice() { print("GPU: \(device.name); BC textures: \(supportsBC(device))") }
     #endif
     print("ALL SELF-TESTS PASSED")
+}
+
+func testRefreshSlotScheduler() throws {
+    let now = 100.0, period = 1.0 / 60.0
+    func sample(_ refresh: Double, _ duration: Double = 1.0 / 60.0, _ observed: Double = 100.0) -> DisplayRefreshClock.Sample {
+        DisplayRefreshClock.Sample(nextRefresh:refresh, period:duration, observedAt:observed)
+    }
+    var scheduler = RefreshSlotScheduler()
+    let early = sample(now + 0.010)
+    guard let first = scheduler.target(now:now, sample:early),
+          let second = scheduler.target(now:now + 0.001, sample:early) else { throw LinkError.invalid("Valid refresh slots were rejected") }
+    try check(abs(first - (early.nextRefresh + period - 0.002)) < 1e-9 && first - now >= 0.012,"First refresh target was not anchored to a physical slot with minimum GPU lead")
+    try check(abs(second - first - period) < 1e-9,"Consecutive frames reused one physical refresh slot")
+    scheduler.reset()
+    try check(scheduler.target(now:now, sample:early) == first,"Explicit reset retained a queued refresh target")
+
+    var corrected = RefreshSlotScheduler()
+    let base = sample(now + 0.020)
+    guard let original = corrected.target(now:now, sample:base),
+          let adjusted = corrected.target(now:now + period, sample:sample(base.nextRefresh + period - 0.0001,period,now + period)) else { throw LinkError.invalid("Small physical clock correction was rejected") }
+    try check(abs(adjusted - original - period + 0.0001) < 1e-9,"A small backward refresh correction skipped an otherwise valid next slot")
+
+    let invalidSamples = [
+        sample(now + 0.020,0), sample(now + 0.020,-period),
+        sample(now + 0.020,.nan), sample(now + 0.020,.infinity),
+        sample(now + 0.020,1.0 / 241.0), sample(now + 0.020,1.0 / 19.0),
+        sample(.nan), sample(.infinity),
+        sample(now + 0.020,period,.nan), sample(now + 0.020,period,.infinity),
+        sample(now + 0.020,period,now - 0.101), sample(now + 0.020,period,now + 0.001)
+    ]
+    for input in invalidSamples {
+        try check(scheduler.target(now:now,sample:input) == nil,"Invalid or stale physical clock input was accepted")
+        try check(scheduler.target(now:now,sample:base) == original,"Rejected clock input failed to reset queued targets")
+    }
+    for invalidNow in [Double.nan,Double.infinity,-Double.infinity] {
+        try check(scheduler.target(now:invalidNow,sample:base) == nil,"Nonfinite render time was accepted")
+    }
+    scheduler.reset()
+    try check(scheduler.target(now:now,sample:sample(now + 0.300)) == nil,"Excessive predicted refresh lead escaped the 50 ms bound")
+    try check(scheduler.target(now:now,sample:base) == original,"Excessive refresh lead failed to reset scheduler state")
+    try check(scheduler.target(now:now,sample:base) != nil,"Second pending refresh slot was rejected prematurely")
+    try check(scheduler.target(now:now,sample:base) == nil,"Accumulated pending refresh slots exceeded the 50 ms bound")
+    try check(scheduler.target(now:now,sample:base) == original,"Backlog rejection failed to reset scheduler state")
+    for boundary in [1.0 / 240.0,1.0 / 20.0] {
+        scheduler.reset()
+        try check(scheduler.target(now:now,sample:sample(now + 0.025,boundary)) != nil,"Supported refresh period boundary was rejected")
+    }
+    print("PASS: physical refresh anchoring, minimum lead, distinct slots, clock corrections, stale/invalid input, bounded backlog and reset")
+}
+
+func testRefreshSubmissionScheduler() throws {
+    let now = 100.0, period = 1.0 / 60.0
+    func sample(_ refresh: Double, _ duration: Double = 1.0 / 60.0, _ observed: Double = 100.0) -> DisplayRefreshClock.Sample {
+        DisplayRefreshClock.Sample(nextRefresh:refresh, period:duration, observedAt:observed)
+    }
+    var scheduler = RefreshSubmissionScheduler()
+    let early = sample(now + 0.010)
+    guard let first = scheduler.target(now:now,sample:early),
+          let second = scheduler.target(now:now + 0.001,sample:early) else { throw LinkError.invalid("Valid refresh submission slots were rejected") }
+    try check(abs(first - (early.nextRefresh + period - 0.012)) < 1e-9 && first - now >= 0.0005,"Submission was not anchored 12 ms before a physical refresh with a positive wait")
+    try check(abs(second - first - period) < 1e-9,"Consecutive submissions reused one physical refresh slot")
+    scheduler.reset()
+    try check(scheduler.target(now:now,sample:early) == first,"Submission reset retained a queued deadline")
+    scheduler.reset()
+    let nearlyDue = sample(now + 0.0124)
+    guard let delayed = scheduler.target(now:now,sample:nearlyDue) else { throw LinkError.invalid("Near-deadline submission did not advance to a usable slot") }
+    try check(abs(delayed - (nearlyDue.nextRefresh + period - 0.012)) < 1e-9,"Submission accepted a wait shorter than 0.5 ms")
+
+    var corrected = RefreshSubmissionScheduler()
+    let base = sample(now + 0.020)
+    guard let original = corrected.target(now:now,sample:base),
+          let adjusted = corrected.target(now:now + period,sample:sample(base.nextRefresh + period - 0.0001,period,now + period)) else { throw LinkError.invalid("Clock correction rejected a valid submission deadline") }
+    try check(abs(adjusted - original - period + 0.0001) < 1e-9,"A small backward clock correction skipped a submission slot")
+
+    let invalidSamples = [
+        sample(now + 0.020,0), sample(now + 0.020,-period),
+        sample(now + 0.020,.nan), sample(now + 0.020,.infinity),
+        sample(now + 0.020,1.0 / 241.0), sample(now + 0.020,1.0 / 19.0),
+        sample(.nan), sample(.infinity),
+        sample(now + 0.020,period,.nan), sample(now + 0.020,period,.infinity),
+        sample(now + 0.020,period,now - 0.101), sample(now + 0.020,period,now + 0.001)
+    ]
+    for input in invalidSamples {
+        try check(scheduler.target(now:now,sample:input) == nil,"Invalid or stale clock input scheduled a submission wait")
+        try check(scheduler.target(now:now,sample:base) == original,"Rejected submission input did not reset its deadline")
+    }
+    for invalidNow in [Double.nan,Double.infinity,-Double.infinity] {
+        try check(scheduler.target(now:invalidNow,sample:base) == nil,"Nonfinite render time scheduled a submission wait")
+    }
+    scheduler.reset()
+    try check(scheduler.target(now:now,sample:sample(now + 0.300)) == nil,"Excessive predicted submission wait escaped its 35 ms bound")
+    try check(scheduler.target(now:now,sample:base) == original,"Excessive submission wait failed to reset state")
+    try check(scheduler.target(now:now,sample:base) != nil,"A valid second pending submission was rejected")
+    try check(scheduler.target(now:now,sample:base) == nil,"Pending submission deadlines exceeded the 35 ms wait bound")
+    try check(scheduler.target(now:now,sample:base) == original,"Submission backlog rejection failed to reset state")
+    for boundary in [1.0 / 240.0,1.0 / 20.0] {
+        scheduler.reset()
+        try check(scheduler.target(now:now,sample:sample(now + 0.025,boundary)) != nil,"Supported refresh period boundary rejected a submission deadline")
+    }
+    print("PASS: physical refresh submission deadlines, minimum wait, distinct slots, clock corrections, stale/invalid input, bounded wait and reset")
+}
+
+func testPresentationCounter() throws {
+    var counter=PresentationCounter(now:10)
+    let step=1.0/60.0
+    for time in [10.0,10+2*step,10+step,10+2*step,0,-1,.nan,.infinity] {counter.record(time)}
+    let first=counter.take(now:10.3)
+    try check(abs(first.uniquePerSecond-10)<0.0001 && abs(first.positivePerSecond-4/0.3)<0.0001,"API timestamp rate did not keep distinct and positive callback measurements separate")
+    try check(first.unique==3 && first.repeated==1 && first.zero==1 && first.invalid==3 && first.reordered==1,"Duplicate, reordered or invalid presentation callbacks changed the unique update count")
+    try check(abs(first.maxGapMS-step*1000)<0.001 && first.longGaps==0,"Reordered callbacks manufactured a presentation gap")
+    counter.record(10+2*step);counter.record(10+3*step);counter.record(10+4*step)
+    let second=counter.take(now:10.5)
+    try check(second.unique==2 && second.repeated==1 && second.zero==0 && second.invalid==0 && second.reordered==0,"Presentation history or per-interval counters did not survive/reset across reports")
+    try check(abs(second.maxGapMS-step*1000)<0.001 && second.longGaps==0,"Presentation gaps lost the previous report's timestamp")
+    try check(counter.record(10+2.5*step),"A distinct late callback was incorrectly discarded by a high-water timestamp")
+    let late=counter.take(now:10.7)
+    try check(late.unique==1 && late.reordered==1 && late.lateGap==1 && late.maxGapMS==0,"An unusually late unique callback corrupted already finalized gap accounting")
+    var bounded=PresentationCounter(now:20,capacity:4)
+    for time in 20...25 {bounded.record(Double(time))}
+    try check(bounded.retainedTimestampCount==4,"Presentation timestamp history grew beyond its bound")
+    try check(!bounded.record(25) && !bounded.record(20) && bounded.record(22.5),"Bounded history accepted an old duplicate or lost a recent reordered unique timestamp")
+    let retired=bounded.take(now:26)
+    try check(retired.unique==7 && retired.repeated==1 && retired.stale==1 && retired.reordered==1,"Retired timestamp history inflated presentation counts")
+    var gaps=PresentationCounter(now:30)
+    for time in [30.0,30.05,30.0] {gaps.record(time)}
+    let gap=gaps.take(now:30.3)
+    try check(gap.unique==2 && gap.longGaps==1 && abs(gap.maxGapMS-50)<0.001,"A repeated timestamp hid or duplicated a real presentation gap")
+    try check(gaps.take(now:30.5).unique==0,"Idle presentation interval retained old updates")
+    print("PASS: unique presentation timestamps, reordered callbacks, cross-interval deduplication, real gaps, invalid timestamps, idle reset and bounded history")
 }
 
 func testChunkedPacking() throws {
@@ -431,6 +564,40 @@ func testViewerPresentation() throws {
 }
 
 #if HOST
+func testCaptureCreditRetention() throws {
+    var created: CVPixelBuffer?
+    try check(CVPixelBufferCreate(nil,16,16,kCVPixelFormatType_32BGRA,nil,&created) == kCVReturnSuccess,"Credit retention test surface allocation")
+    guard let image = created else { throw LinkError.invalid("Missing credit retention test image") }
+    let mailbox = CaptureMailbox(); mailbox.start()
+    var gate = CaptureCreditGate(), inFlight = 1, queuedWakes = 0
+    let limit = 1
+    try check(mailbox.offer(image,id:1),"First pending image failed to schedule")
+    try check(gate.pauseIfFull(inFlight:inFlight,limit:limit,mailbox:mailbox) && gate.waiting,"Full credits did not preserve a pending image")
+    try check(!mailbox.offer(image,id:2),"Replacing a credit-held image scheduled duplicate work")
+    try check(!gate.resumeAfterAcknowledgement(inFlight:inFlight,limit:limit),"Full credits incorrectly resumed capture")
+    inFlight -= 1
+    if gate.resumeAfterAcknowledgement(inFlight:inFlight,limit:limit) { queuedWakes += 1 }
+    if gate.resumeAfterAcknowledgement(inFlight:inFlight,limit:limit) { queuedWakes += 1 }
+    try check(queuedWakes == 1 && !gate.waiting,"ACKs queued duplicate drain resumes")
+    // No new capture follows this ACK: the final pending image must still flush.
+    try check(!gate.pauseIfFull(inFlight:inFlight,limit:limit,mailbox:mailbox),"Available credit blocked the final pending image")
+    let final = mailbox.takeInput()
+    try check(final?.id == 2,"ACK failed to flush the latest final image without a new capture")
+    inFlight += 1
+    try check(inFlight <= limit && mailbox.takeInput() == nil,"One ACK oversent or consumed one pending image twice")
+    try check(gate.pauseIfFull(inFlight:inFlight,limit:limit,mailbox:mailbox) && !gate.waiting,"An empty full-credit mailbox created a spurious ACK wait")
+    try check(mailbox.offer(image,id:3),"A later capture lost scheduling ownership after an empty drain")
+    try check(gate.pauseIfFull(inFlight:inFlight,limit:limit,mailbox:mailbox) && gate.waiting,"Later pending image was not retained")
+    mailbox.stop(); gate.reset()
+    try check(!gate.waiting && !gate.resumeAfterAcknowledgement(inFlight:0,limit:limit),"Stopped capture resumed stale pending work")
+    try check(mailbox.takeInput() == nil && !mailbox.offer(image,id:4),"Stopped capture retained or accepted an image")
+    mailbox.start()
+    try check(mailbox.offer(image,id:5),"Restart failed to schedule after cleanup")
+    try check(!gate.pauseIfFull(inFlight:0,limit:limit,mailbox:mailbox) && mailbox.takeInput()?.id == 5,"Restart did not drain normally with available credit")
+    mailbox.stop()
+    print("PASS: bounded pending image retention, latest replacement, final-image ACK flush without a new capture, single wake, credit limit and stop/restart cleanup")
+}
+
 func testCaptureMailbox() throws {
     var first: CVPixelBuffer?, second: CVPixelBuffer?
     CVPixelBufferCreate(nil,16,16,kCVPixelFormatType_32BGRA,nil,&first)

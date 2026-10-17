@@ -47,6 +47,9 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
     let work = DispatchQueue(label:"retinalink.capture",qos:.userInteractive,autoreleaseFrequency:.workItem)
     let captureQueue = DispatchQueue(label:"retinalink.capture.ingress",qos:.userInteractive,autoreleaseFrequency:.workItem)
     let mailbox = CaptureMailbox()
+    var creditGate = CaptureCreditGate()
+    let dropCreditFrames = LaunchOptions.has("--drop-credit-frames")
+    var creditWaits = 0, creditResumes = 0
     let captureTiming = CaptureTiming()
     let captureOnly = LaunchOptions.has("--capture-only")
     let encodeOnly = LaunchOptions.has("--encode-only")
@@ -118,7 +121,7 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
         let stream = SCStream(filter:SCContentFilter(display:display,excludingWindows:[]),configuration:config,delegate:self)
         try stream.addStreamOutput(self,type:.screen,sampleHandlerQueue:inlineCapture ? work : captureQueue)
         self.stream = stream
-        work.sync { active = true }
+        work.sync { creditGate.reset(); active = true }
         mailbox.start()
         try await stream.startCapture()
         if let period=captureCyclePeriod {
@@ -156,7 +159,7 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
     @MainActor func stop() async {
         captureCycle?.cancel();captureCycle=nil
         mailbox.stop()
-        work.sync { active = false; watchdog?.cancel(); watchdog = nil; inFlight.removeAll() }
+        work.sync { active = false; creditGate.reset(); watchdog?.cancel(); watchdog = nil; inFlight.removeAll() }
         if let stream = stream { try? await stream.stopCapture() }
         stream = nil; virtual = nil
         activity = nil
@@ -174,6 +177,11 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
                 self.ackDispatchMS += (ProcessInfo.processInfo.systemUptime-received)*1000
                 self.maxACK=max(self.maxACK,(ProcessInfo.processInfo.systemUptime-time)*1000)
                 self.maxACKDispatch=max(self.maxACKDispatch,(ProcessInfo.processInfo.systemUptime-received)*1000)
+                if self.creditGate.resumeAfterAcknowledgement(inFlight:self.inFlight.count,limit:self.frameLimit) {
+                    self.creditResumes += 1
+                    FrameTrace.shared.event("capture_credit_resume",sequence:seq,fields:["in_flight":self.inFlight.count,"limit":self.frameLimit])
+                    self.work.async { [weak self] in self?.drainCapture() }
+                }
             } catch { self.fail(String(describing:error)) }
         }
     }
@@ -204,7 +212,17 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
         }
     }
     private func drainCapture() {
-        guard active else { mailbox.stop(); return }
+        guard active else { creditGate.reset(); mailbox.stop(); return }
+        if !dropCreditFrames && !encodeOnly && probe == nil {
+            let wasWaiting = creditGate.waiting
+            if creditGate.pauseIfFull(inFlight:inFlight.count,limit:frameLimit,mailbox:mailbox) {
+                if creditGate.waiting && !wasWaiting {
+                    creditWaits += 1
+                    FrameTrace.shared.event("capture_credit_wait",fields:["in_flight":inFlight.count,"limit":frameLimit])
+                }
+                return
+            }
+        }
         guard let input = mailbox.takeInput() else { return }
         autoreleasepool { encode(input.image,captureID:input.id) }
         // Yield between frames so acknowledgements and the watchdog cannot starve.
@@ -239,7 +257,7 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
         } catch { fail(String(describing:error)) }
     }
     func stream(_ stream: SCStream,didStopWithError error: Error) { work.async { self.fail(String(describing:error)) } }
-    private func fail(_ error: String) { guard active else { return }; active = false; onError?(error) }
+    private func fail(_ error: String) { guard active else { return }; active = false; creditGate.reset(); mailbox.stop(); onError?(error) }
     private func report() {
         let input = mailbox.counts()
         let timing = captureTiming.summary()
@@ -251,11 +269,13 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
         let transport = String(format:"\nSend queue + transport processing %.1f ms · ACK dispatch %.1f ms · coalesced %d",sendMS/Double(max(1,sendCount)),ackDispatchMS/Double(max(1,delivered)),input.replaced) + "\n" + timing.text + String(format:"\nEncoder GPU %.2f ms · GPU submit/wait %.2f ms · tile gather %.2f ms · packet pack %.2f ms",gpuMS/Double(max(1,encodes)),gpuWaitMS/Double(max(1,encodes)),gatherMS/Double(max(1,encodes)),packMS/Double(max(1,encodes)))
         let probeText=probe.map {"\n"+$0.report()} ?? ""
         let tails=String(format:"\nWorst ms: acknowledgement %.1f · send processing %.1f · ACK dispatch %.1f",maxACK,maxSend,maxACKDispatch)
-        onStatus?(String(format:"%.1f delivered updates/s · %.1f Mbps · %d/%d frames in flight\nCapture %.1f/s · unchanged %d · backpressure skips %d · inactive %d\n",Double(delivered)/elapsed,Double(sentBytes)*8/elapsed/1e6,inFlight.count,frameLimit,Double(complete)/elapsed,unchanged,skipped,inactive) + timings + transport + tails + probeText)
+        let creditText=String(format:"\nCredit waits %d · ACK resumes %d · pending for credit %@",creditWaits,creditResumes,creditGate.waiting ? "yes":"no")
+        onStatus?(String(format:"%.1f delivered updates/s · %.1f Mbps · %d/%d frames in flight\nCapture %.1f/s · unchanged %d · backpressure skips %d · inactive %d\n",Double(delivered)/elapsed,Double(sentBytes)*8/elapsed/1e6,inFlight.count,frameLimit,Double(complete)/elapsed,unchanged,skipped,inactive) + timings + transport + tails + creditText + probeText)
         delivered = 0; sentBytes = 0; skipped = 0; lastStats = now
         complete = 0; unchanged = 0; inactive = 0; encodes = 0; encodeMS = 0; ackMS = 0
         sendMS = 0; sendCount = 0; ackDispatchMS = 0
         maxACK=0;maxSend=0;maxACKDispatch=0
+        creditWaits=0;creditResumes=0
         gpuMS = 0; gpuWaitMS = 0; gatherMS = 0; packMS = 0
     }
 }

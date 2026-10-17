@@ -30,11 +30,35 @@ final class CaptureMailbox {
         guard enabled, let image = pending else { scheduled = false; return nil }
         pending = nil; return image
     }
+    // Atomically preserve pending ownership while the encoder has no credit.
+    // If empty, release scheduling ownership so a later offer schedules work.
+    func retainPending() -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        guard enabled, pending != nil else { scheduled = false; return false }
+        return true
+    }
     func counts() -> (complete: Int, inactive: Int, replaced: Int) {
         lock.lock(); defer { lock.unlock() }
         let result = (complete, inactive, replaced)
         complete = 0; inactive = 0; replaced = 0
         return result
     }
+}
+
+// Confined to CaptureSession.work. The mailbox owns the one pending image;
+// this gate owns only the decision to resume its drain chain after an ACK.
+struct CaptureCreditGate {
+    private(set) var waiting = false
+    mutating func pauseIfFull(inFlight: Int, limit: Int, mailbox: CaptureMailbox) -> Bool {
+        guard inFlight >= limit else { return false }
+        waiting = mailbox.retainPending()
+        return true
+    }
+    mutating func resumeAfterAcknowledgement(inFlight: Int, limit: Int) -> Bool {
+        guard waiting, inFlight < limit else { return false }
+        waiting = false
+        return true
+    }
+    mutating func reset() { waiting = false }
 }
 #endif

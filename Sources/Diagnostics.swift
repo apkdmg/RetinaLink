@@ -7,7 +7,7 @@ enum LaunchOptions {
         guard let i = CommandLine.arguments.firstIndex(of: flag), i + 1 < CommandLine.arguments.count else { return nil }
         return CommandLine.arguments[i + 1]
     }
-    static let version = "0.2.9"
+    static let version = "0.2.10"
     static let build = Bundle.main.object(forInfoDictionaryKey:"CFBundleVersion") as? String ?? "development"
 }
 

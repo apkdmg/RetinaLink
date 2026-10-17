@@ -11,7 +11,7 @@ for name in sys.argv[1:]:
     print('Source drawn fps:',round(statistics.mean(drawn),2) if drawn else 'Source presentation rate not independently measured; see issued-update counters in source.json')
     for role in ['host','viewer']:
         rows=[s for s in json.loads((d/(role+'.json')).read_text()) if s['kind']==role and s['time']>start+5 and s['time']<end-2]
-        fields={'delivered':r'([\d.]+) delivered','capture':r'Capture ([\d.]+)', 'encode_ms':r'encode \+ pack ([\d.]+)', 'ack_ms':r'acknowledgement ([\d.]+)', 'rendered':r'([\d.]+) rendered', 'presented':r'Presentation ([\d.]+)', 'gpu_ms':r'GPU ([\d.]+)', 'unpack_ms':r'unpack ([\d.]+)', 'upload_ms':r'upload setup ([\d.]+)', 'queue_ms':r'queue ([\d.]+)', 'body_ms':r'body assembly ([\d.]+)','drawable_ms':r'Drawable wait ([\d.]+)', 'mbps':r'([\d.]+) Mbps','skips':r'backpressure skips (\d+)'}
+        fields={'delivered':r'([\d.]+) delivered','capture':r'Capture ([\d.]+)', 'encode_ms':r'encode \+ pack ([\d.]+)', 'ack_ms':r'acknowledgement ([\d.]+)', 'rendered':r'([\d.]+) rendered', 'legacy_positive_callbacks_hz':r'Presentation ([\d.]+)', 'unique_api_timestamps_hz':r'API\): ([\d.]+) unique timestamps/s', 'positive_callbacks_hz':r'([\d.]+) positive callbacks/s', 'gpu_ms':r'GPU ([\d.]+)', 'unpack_ms':r'unpack ([\d.]+)', 'upload_ms':r'upload setup ([\d.]+)', 'queue_ms':r'queue ([\d.]+)', 'body_ms':r'body assembly ([\d.]+)','drawable_ms':r'Drawable wait ([\d.]+)', 'mbps':r'([\d.]+) Mbps','skips':r'backpressure skips (\d+)'}
         print(role,'samples',len(rows))
         for field,pattern in fields.items():
             vals=[float(m.group(1)) for s in rows if (m:=re.search(pattern,s['text']))]

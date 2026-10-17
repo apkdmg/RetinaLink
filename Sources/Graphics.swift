@@ -2,6 +2,7 @@ import AppKit
 import Metal
 import QuartzCore
 import CoreVideo
+import Darwin
 
 func shaderLibrary(_ device: MTLDevice, baseline: Bool = LaunchOptions.has("--baseline-encoder"), tileMajor: Bool = !LaunchOptions.has("--row-major-encoder"), atomicStore: Bool = !LaunchOptions.has("--baseline-dirty-atomic")) throws -> MTLLibrary {
     let url = Bundle.main.url(forResource: "Shaders", withExtension: "metal") ?? URL(fileURLWithPath: "Resources/Shaders.metal")
@@ -63,7 +64,9 @@ final class TextureEncoder {
         encoder.dispatchThreads(MTLSize(width:w/4,height:h/4,depth:1),threadsPerThreadgroup:MTLSize(width:8,height:8,depth:1))
         encoder.endEncoding()
         let submit = ProcessInfo.processInfo.systemUptime
-        command.commit(); command.waitUntilCompleted()
+        // Core Video requires the wrapper, as well as the Metal texture, to
+        // remain alive until the GPU has finished reading its IOSurface.
+        withExtendedLifetime(wrapped) {command.commit(); command.waitUntilCompleted()}
         lastWaitMS = (ProcessInfo.processInfo.systemUptime-submit)*1000
         lastGPUms = max(0,command.gpuEndTime-command.gpuStartTime)*1000
         if let error = command.error { throw error }
@@ -179,9 +182,16 @@ final class DisplayView: NSView {
     private let surface = CAMetalLayer()
     private let redrawLock = NSLock()
     private var redrawPending = false
+    private var refreshClock: DisplayRefreshClock?
+    private let presentationPermit = LaunchOptions.has("--single-presentation") ? DispatchSemaphore(value:1) : nil
     private let presentationPlan:[Double]
     private let presentationPeriod:Double
     private var presentationEpoch=0.0,presentationPhase = -1,nextPresentation=0.0
+    private let refreshPlan:[Int]
+    private let refreshPeriod:Double
+    private var refreshEpoch=0.0,refreshPhase = -1
+    private var refreshScheduler=RefreshSlotScheduler()
+    private var submissionScheduler=RefreshSubmissionScheduler()
     var onFrame: ((RenderTiming) -> Void)?
     var onPresentation: ((Int, Int, Double) -> Void)?
     var onActualPresent: ((Double) -> Void)?
@@ -197,6 +207,12 @@ final class DisplayView: NSView {
         let period=Double(LaunchOptions.value("--presentation-period") ?? "25") ?? .nan
         guard raw==nil || (!plan.isEmpty && plan.count==parts.count && plan.count<=6 && plan.first==0 && plan.last==0 && plan.allSatisfy({$0.isFinite && (0...40).contains($0)}) && period.isFinite && (10...60).contains(period)) else {throw LinkError.invalid("Presentation probe needs 0…40 ms leads, initial/final zero and 10…60 second phases")}
         presentationPlan=plan;presentationPeriod=period
+        let refreshRaw=LaunchOptions.value("--refresh-plan")
+        let refreshParts=refreshRaw?.split(separator:",",omittingEmptySubsequences:false).map(String.init) ?? []
+        let refresh=refreshParts.compactMap(Int.init)
+        let refreshSeconds=Double(LaunchOptions.value("--refresh-period") ?? "30") ?? .nan
+        guard refreshRaw==nil || (raw==nil && !LaunchOptions.has("--single-presentation") && refresh.count==refreshParts.count && !refresh.isEmpty && refresh.count<=6 && refresh.first==0 && refresh.last==0 && refresh.allSatisfy({(0...2).contains($0)}) && refreshSeconds.isFinite && (10...60).contains(refreshSeconds)) else {throw LinkError.invalid("Refresh probe needs initial/final zero, 0/1/2 phases and 10…60 seconds; use alone")}
+        refreshPlan=refresh;refreshPeriod=refreshSeconds
         guard let d = MTLCreateSystemDefaultDevice(), let q = d.makeCommandQueue() else { throw LinkError.invalid("Metal GPU unavailable") }
         guard supportsBC(d) else { throw LinkError.invalid("This GPU/driver does not report BC texture support") }
         device = d; commandQueue = q; uploader = TextureUploader(device:d)
@@ -221,7 +237,14 @@ final class DisplayView: NSView {
         let scale = window?.backingScaleFactor ?? 2
         let size=CGSize(width:max(1,bounds.width*scale),height:max(1,bounds.height*scale))
         let changed=layer.contentsScale != scale || layer.drawableSize != size
-        FrameTrace.shared.event("surface_update",fields:["view":traceID,"changed":changed,"width":size.width,"height":size.height])
+        FrameTrace.shared.event("surface_update",fields:["view":traceID,"changed":changed,"width":size.width,"height":size.height,
+            "transaction":layer.presentsWithTransaction,"vsync":layer.displaySyncEnabled,"drawables":layer.maximumDrawableCount,
+            "opaque":layer.isOpaque,"same_layer":layer === surface,"fullscreen":window?.styleMask.contains(.fullScreen) ?? false])
+        if LaunchOptions.has("--trace-display-clock") || !refreshPlan.isEmpty, let screen=window?.screen,
+           let number=screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber {
+            if refreshClock == nil {refreshClock=DisplayRefreshClock(traceID:traceID)}
+            refreshClock?.start(displayID:number.uint32Value)
+        }
         if !changed && LaunchOptions.has("--skip-redundant-redraws") {return}
         layer.contentsScale = scale; layer.drawableSize = size
         // A static desktop still needs redrawing after entering full screen or resizing.
@@ -257,6 +280,13 @@ final class DisplayView: NSView {
         renderQueue.async { [weak self] in
             guard let self = self else { return }
             autoreleasepool { do {
+                var permitTransferred=false
+                if let permit=self.presentationPermit {
+                    let began=CACurrentMediaTime()
+                    guard permit.wait(timeout:.now()+1) == .success else {throw LinkError.invalid("Presentation callback timed out")}
+                    FrameTrace.shared.event("presentation_permit",fields:["view":self.traceID,"wait_ms":(CACurrentMediaTime()-began)*1000])
+                }
+                defer {if !permitTransferred {self.presentationPermit?.signal()}}
                 let start = ProcessInfo.processInfo.systemUptime
                 let frame = try Frame.parse(data)
                 FrameTrace.shared.event("decoded",sequence:frame.sequence,fields:["view":self.traceID,"arrival":arrival,"render_start":start])
@@ -272,10 +302,13 @@ final class DisplayView: NSView {
                 // only identity in callbacks, not an entire decoded 5K frame.
                 let sequence=frame.sequence, width=frame.width, height=frame.height
                 if #available(macOS 10.15.4, *) {
+                    let permit=self.presentationPermit
                     drawable.addPresentedHandler { [weak self] drawable in
+                        permit?.signal()
                         FrameTrace.shared.event("presented",sequence:sequence,fields:["view":self?.traceID ?? "closed","presented_time":drawable.presentedTime])
                         self?.onPresentation?(dw, dh, drawable.presentedTime)
                     }
+                    permitTransferred=true
                 }
                 let beforePresent=ProcessInfo.processInfo.systemUptime
                 FrameTrace.shared.event("present_begin",sequence:sequence,fields:["view":self.traceID])
@@ -300,6 +333,34 @@ final class DisplayView: NSView {
         }
     }
     private func present(_ drawable: CAMetalDrawable, on command: MTLCommandBuffer, sequence: UInt64) {
+        if sequence>0 && !refreshPlan.isEmpty {
+            let now=CACurrentMediaTime()
+            if refreshEpoch==0 {refreshEpoch=now}
+            let phase=min(refreshPlan.count-1,Int((now-refreshEpoch)/refreshPeriod))
+            if phase != refreshPhase {
+                refreshPhase=phase;refreshScheduler.reset();submissionScheduler.reset()
+                let policy=["native","timed","submission"][refreshPlan[phase]]
+                DiagnosticLog.shared.record("refresh-probe","Phase \(phase); \(policy); vsync retained")
+                FrameTrace.shared.event("refresh_mode",fields:["view":traceID,"phase":phase,"anchored":refreshPlan[phase] != 0,"policy":policy])
+            }
+            if let sample=refreshClock?.sample() {
+                // Read the clock before 'now': its callback can update observedAt
+                // concurrently, and a newer sample must not look future-dated.
+                let scheduleNow=CACurrentMediaTime()
+                if refreshPlan[phase]==1,let target=refreshScheduler.target(now:scheduleNow,sample:sample) {
+                    FrameTrace.shared.event("refresh_target",sequence:sequence,fields:["view":traceID,"target":target,"lead_ms":(target-scheduleNow)*1000,"prediction":sample.nextRefresh,"period":sample.period])
+                    command.present(drawable,atTime:target);return
+                }
+                if refreshPlan[phase]==2,let target=submissionScheduler.target(now:scheduleNow,sample:sample) {
+                    let remaining=target-CACurrentMediaTime()
+                    if remaining>0 {
+                        let deadline=CVGetCurrentHostTime()+UInt64(remaining*CVGetHostClockFrequency())
+                        _ = mach_wait_until(deadline)
+                    }
+                    FrameTrace.shared.event("commit_target",sequence:sequence,fields:["view":traceID,"target":target,"wait_ms":(CACurrentMediaTime()-scheduleNow)*1000,"wake_late_ms":(CACurrentMediaTime()-target)*1000])
+                }
+            }
+        }
         if sequence>0 && !presentationPlan.isEmpty {
             let now=CACurrentMediaTime()
             if presentationEpoch==0 {presentationEpoch=now}

@@ -5,3 +5,7 @@ build/
 *.dSYM/
 *.zip
 *.trace.jsonl
+work/
+outputs/
+build[0-9]*/
+__pycache__/
