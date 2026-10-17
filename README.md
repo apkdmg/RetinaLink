@@ -1,6 +1,6 @@
 # RetinaLink
 
-RetinaLink 0.3.1 build 45 is Developer ID signed and notarized by Apple. Both apps have verified stapled tickets, including the Viewer bundled inside Host. The release adds pairing-preserving Viewer updates and a verified classic-Keychain dialog guard. The actual signed build-44 to build-45 installation update passes on the Mac Studio and iMac: pairing, startup settings and the existing capture grant are retained. See [RELEASING.md](RELEASING.md).
+RetinaLink 0.4.0 build 48 adds signed automatic updates for both Host and Viewer, with all controls on Host. Real SSH tests on the Mac Studio and Big Sur iMac pass for automatic installation, rejected feed/archive signatures, opt-out, retained pairing and startup/crash recovery. Both installed apps are Developer ID signed and Apple-notarized. Public hosting is deliberately unconfigured pending the owner’s choice. See [AUTOMATIC_UPDATES.md](AUTOMATIC_UPDATES.md).
 
 Turn a Retina iMac into an unattended second display, with setup and daily controls on the main Mac. Host installs Viewer over an authenticated SSH connection, establishes saved device trust, and manages its display connection automatically. Viewer stays fullscreen, shows a quiet standby screen when disconnected, and reconnects without a mouse, keyboard, pairing code or Connect button on the iMac.
 

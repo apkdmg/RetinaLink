@@ -47,3 +47,9 @@ python3 Tools/test_automatic_updates.py \
 ```
 
 The bootstrap must already be streaming and both builds must be notarized. The local test origin is restricted to a literal loopback IP with an explicit port, no credentials, path, query or fragment. It never relaxes the public HTTPS policy or signature requirements. Tests do not reboot, unlock FileVault, change login policy, or use a UI capture helper.
+
+## Verified on the actual Macs
+
+The signed 0.3.1 build-45 to 0.4.0 build-46 bootstrap passes without pairing or capture reapproval. The actual automatic build-46 to build-48 update then passes on Host and the Radeon Big Sur Viewer. Both roles reject modified signed XML and corrupted archive bytes, respect opt-out, install the valid update and reconnect fullscreen. Host/Viewer binding hashes and the public authorized_keys file hash stay unchanged. Both updated apps recover after simulated crashes through their startup agents. FileVault/login settings and the UI capture helper remain unchanged/off. All local test preferences, forwarding and the test server are removed afterward. No physical reboot is performed.
+
+Evidence: `work/automatic-update-46-to-48/result.json`, its before/after metadata, failure status files and timing-only request log; `work/signed-bootstrap-45-to-46/result.json`; `work/auto-update-46-imac-self-tests.txt`; final notarization state in `work/release-0.4.0-build48/release-state.json`. All 15 offline policy tests pass. The developer approved the official `generate_appcast` and `sign_update` tools once in macOS Keychain; no private key was exported.

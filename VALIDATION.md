@@ -1,3 +1,19 @@
+# Automatic updates verified — 0.4.0 build 48, 17 October 2026
+
+**Both installed apps automatically updated through Sparkle from build 46 to build 48 and remain signed, notarized, paired and streaming fullscreen.** Host owns the automatic-update preference and explicit Update Now action. Viewer needs no updater interaction. The earlier signed 45→46 bootstrap also passes without pairing or capture reapproval.
+
+The real SSH test disables automatic installation on both roles and confirms that availability alone does not download/install an archive. It then serves modified signed XML and corrupted ZIP bytes: both apps reject both cases, retain build 46, and keep streaming. Restoring the original signed feeds/archives automatically downloads, verifies, installs and relaunches both apps into build 48. Before/after Host and Viewer binding hashes and the complete public authorized_keys hash match; Host ID, signing team, namespace, startup preference, FileVault and login status also match. No enrollment or private-key export is used by this test.
+
+Both updated apps hand control back to their existing startup agents. Simulated crashes on each Mac recover into fullscreen streaming with the retained pairing. After testing, loopback HTTP service, the temporary management-SSH feed forward and local test-feed preferences are removed. Normal agents retain only `--autostart` / `--appliance`; both updater status records explicitly report public hosting unconfigured. Public hosting was deferred by the owner; these builds do not pretend to have an online production feed. The UI capture helper stays off throughout. An internal Host view-hierarchy export, without screen capture, verifies the native update card layout.
+
+Both clean signed releases are accepted and stapled. Final Viewer notarization ID: `45ddd38b-5a69-455e-9402-5976efa6e4e6`; final Host ID: `58438df7-5dd5-46fc-986e-820b60965896`. The final apps use source commit `9ea2427`, with Sparkle 2.9.6 and every nested helper re-signed for team ZPCS5VQL89. The private Ed25519 update key remains in Keychain; the owner authorized only the official publisher tools. Fifteen offline policy tests pass, along with actual signed Host and AMD iMac self-tests. Gatekeeper accepts the installed Viewer as Notarized Developer ID.
+
+A final 30-second 5K native GPU scroll sanity check averages 58.65 delivered and 58.67 rendered updates/s; source drawing averages 58.81 fps. Host has zero backpressure skips; Viewer drawable wait averages 0.0 ms. This establishes moving-content streaming after the update, not stable 60 fps or physical scanout proof. No physical logout/reboot is performed.
+
+Download: `outputs/RetinaLink-0.4.0.zip`, SHA-256 `5fbe9c70c1e250de4432d60d4a596f1ec5312364f07da3792ae18ae03747c44a`. Public release metadata is in `outputs/RetinaLink-0.4.0-Release.json`. Detailed evidence: `work/automatic-update-46-to-48/result.json`, its before/after/failure/request records, `work/signed-bootstrap-45-to-46/result.json`, `work/auto-update-48-imac-final-verification.txt`, `work/auto-update-policy-tests-final.txt`, final release states and `work/perf/automatic-update-040-live`. Earlier records below are historical.
+
+---
+
 # Apple notarization accepted — 17 October 2026
 
 **Apple has accepted Host and Viewer in both signed builds 44 and 45.** Tickets are stapled and validated; Gatekeeper reports `source=Notarized Developer ID`. The final 0.3.1 build-45 distribution is `outputs/RetinaLink-0.3.1.zip`, SHA-256 `56d3defc11eb56ec0c37fe3067ed10f1eb61234c220ab88cfab9062cb2cc6aa8`. Its exact bundled Viewer ZIP was extracted and its signature, executable hash and stapled ticket verified before packaging. No passwords or private signing keys were copied into artifacts.
