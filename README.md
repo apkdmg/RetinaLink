@@ -1,8 +1,8 @@
 # RetinaLink
 
-RetinaLink 0.6.2 includes one-time Viewer installation, two-screen Host approval and direct encrypted reconnection. Standard setup no longer requires Remote Login or an iMac account password. Existing pairs reuse their original Keychain credential and binding; FileVault and login settings remain unchanged. Host and Viewer have separate drag-to-Applications installers, and Host also includes an exportable signed Viewer archive.
+RetinaLink 0.7.0 adds automatic Ethernet discovery and selection without entering IP addresses. It uses macOS's existing automatic addresses and leaves company network settings unchanged. One-time Viewer installation, two-screen Host approval and encrypted reconnection remain: standard setup does not require Remote Login or an iMac account password. Existing pairs reuse their original Keychain credential and binding; FileVault and login settings remain unchanged. Host and Viewer have separate drag-to-Applications installers, and Host also includes an exportable signed Viewer archive.
 
-Turn a Retina iMac into an unattended second display. Install Viewer on the iMac once, approve your main Mac, then use Host for everyday controls. Viewer stays fullscreen, shows a quiet standby screen when disconnected, and reconnects without a daily code or click. See [NATIVE_CONNECTION.md](NATIVE_CONNECTION.md) for authentication, migration and test boundaries, and [AUTOMATIC_UPDATES.md](AUTOMATIC_UPDATES.md) for signed updates. Public update hosting remains unconfigured.
+Turn a Retina iMac into an unattended second display. Install Viewer on the iMac once, approve your main Mac, then use Host for everyday controls. Viewer stays fullscreen, shows a quiet standby screen when disconnected, and reconnects without a daily code or click. See [DIRECT_ETHERNET.md](DIRECT_ETHERNET.md) for cable connections and their validation boundaries, [NATIVE_CONNECTION.md](NATIVE_CONNECTION.md) for authentication and migration, and [AUTOMATIC_UPDATES.md](AUTOMATIC_UPDATES.md) for signed updates. Public update hosting remains unconfigured.
 
 Host requires Apple silicon and macOS 13+. Viewer supports Intel macOS Catalina 10.15+ and Apple silicon macOS 11+. The current test receiver is a Late-2014 5K iMac on Big Sur 11.7.8 / AMD Radeon R9 M290X. One Viewer is supported at a time.
 
@@ -30,6 +30,16 @@ Viewer has a borderless native-resolution window. On connection loss, it replace
 Viewer discovers its trusted Host and connects directly using the saved random TLS credential. Discovery cannot grant access: a peer must complete authenticated TLS before streaming. A verified Host address is retained as a fallback when discovery is unavailable. Updated existing pairs stop using the app-owned SSH display tunnel after the first authenticated direct connection. Their original pairing records and SSH keys are preserved, rather than silently regenerated or removed.
 
 Host controls signed Viewer updates through the authenticated app connection. Sparkle validates the signed feed and archive, and compatible Developer ID replacements preserve pairing. Public hosting is not yet configured; supplied signed apps can be installed in the same permanent locations. The legacy management-SSH replacement path remains only for older installations and advanced maintenance.
+
+## Automatic Ethernet
+
+Connect a supported USB Ethernet hub to the Studio and run an ordinary Ethernet cable from the hub to the iMac's Ethernet port. Keep the Studio's existing company connection plugged in. With the usual automatic macOS network settings, RetinaLink discovers that route without a router, DHCP server or manual IP entry. It observes IPv6 link-local addresses and macOS's IPv4 link-local fallback; it does not assign addresses, enable protocols or change DNS, gateways, routes, network service order or Internet Sharing.
+
+Viewer prefers Ethernet with only automatic addresses, then configured Ethernet, then Wi-Fi. Each discovered route retains its exact network interface. If a preferred Ethernet route appears while streaming, Viewer authenticates a separate TLS probe before reconnecting on it; an untrusted advertisement or failed probe cannot interrupt the working stream. If a route fails, retries rotate through available alternatives, with bounded attempt history and cooldowns. A handover can briefly interrupt the picture. Your saved pairing remains valid.
+
+Connection diagnostics report **Ethernet**, **Ethernet · automatic addressing** or **Wi-Fi**. These describe the selected network path, not proof that a cable bypasses every switch. The iMac's Ethernet port is occupied by the display cable; preserving its company access may require an existing Wi-Fi connection or another Ethernet adapter. RetinaLink leaves those connections unchanged.
+
+The physical UGREEN CM888 cable setup, operation without a DHCP server and real unplug/replug recovery remain untested until that hardware is connected. Existing Ethernet tests and software policy tests do not establish those results or stable physical 5K60. See [DIRECT_ETHERNET.md](DIRECT_ETHERNET.md) for requirements, managed-network limitations and the complete test boundary.
 
 ## FileVault and dedicated-display setup
 

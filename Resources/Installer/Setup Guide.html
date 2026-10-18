@@ -43,6 +43,15 @@
   <p>Viewer is discoverable for new setup for ten minutes after opening while unpaired. Choose <strong>Display → Make Discoverable for Setup</strong> on the iMac to start another setup window. Once paired, Viewer no longer accepts new pairing requests.</p>
  </section>
  <section>
+  <span class="pill">Automatic Ethernet</span>
+  <h2>Plug in a cable. Keep your pairing.</h2>
+  <p>Connect a supported USB Ethernet hub to your main Mac, then connect an ordinary Ethernet cable from that hub to your iMac’s Ethernet port. Keep the main Mac’s existing company connection plugged in. Leave Host and Viewer open.</p>
+  <p>With the usual automatic macOS network settings, RetinaLink finds the connection <strong>without entering IP addresses</strong>. It uses the automatic local addresses macOS already provides. No router, DHCP server, administrator password or new pairing is required for that cable.</p>
+  <p><strong>Your company network settings stay unchanged.</strong> RetinaLink does not assign static addresses or change DNS, gateways, DHCP, network service order or Internet Sharing. The iMac’s Ethernet port is occupied by the display cable; keeping its company access may require an existing Wi-Fi connection or another adapter.</p>
+  <p>Viewer prefers available Ethernet connections and verifies the saved pairing before switching a working display to a preferred route. Switching may briefly interrupt the picture. If the connection disappears, Viewer keeps trying the remaining routes and shows its waiting screen when none is available.</p>
+  <p class="note">Ethernet status describes the network connection, not proof that it bypasses a switch. Adapter compatibility, disabled network protocols or company policies can prevent automatic discovery; RetinaLink leaves those settings unchanged. Testing with the physical UGREEN CM888 cable setup and real unplug/replug recovery remains pending. A cable does not guarantee stable 5K at 60 fps.</p>
+ </section>
+ <section>
   <h2>Already paired? Keep your pairing.</h2>
   <p>Update both apps in their existing permanent Applications locations. The new apps reuse the saved device credential and Host identity, then reconnect directly. There is no new verification step for an existing pair. Keep a single copy of each app.</p>
   <p>RetinaLink does not switch off Remote Login automatically: it may be used by your administrator or other software. After confirming a direct RetinaLink connection, you may turn it off yourself if nothing else needs it.</p>

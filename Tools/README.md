@@ -106,3 +106,44 @@ The first script launches the actual approval controllers with UUID-isolated pre
 The second script uses already-signed loopback feeds to update the permanently installed apps through Sparkle, verifies binding/public authorized-keys/FileVault/login/power policy are unchanged, confirms direct 5K streaming with no app-owned SSH display master, and tests normal Host startup-agent restart plus Viewer relaunch. It preserves the original-account Viewer's disabled startup preference left by dedicated setup, rather than claiming launchd crash recovery in that account. Its loopback feed forward uses the separate test SSH connection and is removed afterward. Baseline checks require a fresh authenticated handshake, and recovery checks require new Host capture diagnostics rather than a stale Viewer phase label. When upgrading an old Viewer that can retain a half-open idle connection, `--restart-baseline-viewer` performs one explicit initial relaunch; the post-update Host restart must still reconnect without restarting Viewer. Failure cleanup restores the existing normal Host agent. Public hosting remains unconfigured.
 
 The one-time `update_dedicated_viewer.sh` is test-machine maintenance for the already-created `retinalinkdisplay` account. It requires the owner to authorize sudo in their own Terminal, validates a private clone of the signed/notarized Viewer, preserves the existing app on failure and replaces only that other account's app. It does not read pairing secrets or change account, encryption, automatic-login or lock policy. Normal new-user installation does not run it or require administrator SSH.
+
+## Automatic Ethernet discovery and recovery (0.7.0)
+
+See [DIRECT_ETHERNET.md](../DIRECT_ETHERNET.md) for the user flow and transport boundaries. These tests require an existing authenticated SSH master and installed, paired signed apps. They do not create management credentials or change network, FileVault or Remote Login settings. Replace the example interface names with the iMac's existing wired and fallback interfaces; the two Macs need not use the same names.
+
+`test_direct_ethernet.py` only reads both Macs' configuration and running connection metadata. It does not start or stop apps. Take a baseline before the exercise, then compare afterward using fresh output paths:
+
+```sh
+python3 Tools/test_direct_ethernet.py snapshot \
+  --socket /absolute/authenticated/control --address IMAC_IP --user IMAC_USER \
+  --output work/direct-link-test/unique-before.json
+python3 Tools/test_direct_ethernet.py check \
+  --socket /absolute/authenticated/control --address IMAC_IP --user IMAC_USER \
+  --baseline work/direct-link-test/unique-before.json \
+  --output work/direct-link-test/unique-after.json --require-link-local
+```
+
+The comparison checks persistent network configuration, service order, default route, DNS, pairing binding and FileVault. Both actions require the UI capture helper to be off and the app-owned SSH display tunnel to be absent. `--require-link-local` additionally requires scoped link-local display sockets on both Macs; it does not prove a direct physical cable. Optional `--expected-interface` refers to the Studio's interface. Use `--physical-direct-cable` only after the owner confirms that physical arrangement; the flag does not make the tool independently prove it.
+
+The signed Viewer provides a bounded TLS probe without starting a second Viewer window or sending a Viewer greeting (`Hello`), frames or update commands. Run it as the already signed-in Viewer account, whose login Keychain must be available silently. Launch Services provides the installed app's GUI permission context; `--direct-link-probe` runs before ordinary Viewer UI startup:
+
+```sh
+/usr/bin/ssh -S /absolute/authenticated/control \
+  -o BatchMode=yes -o ConnectTimeout=5 -l IMAC_USER IMAC_IP \
+  '/usr/bin/open -n -W "/Users/IMAC_USER/Applications/RetinaLink Viewer.app" --args --direct-link-probe --probe-duration 8 --probe-interface en0 --probe-output /Users/IMAC_USER/Library/Logs/RetinaLink/direct-link-probe.json'
+```
+
+Add `--probe-untrusted` to that remote command for an explicit negative test using a disposable wrong credential. Inspect the JSON report: the negative case must contain `success: false`; `open`'s exit status does not report the app's authentication result. Neither probe changes the saved credential. Host keeps probes provisional, so they must leave the current stream intact. A positive result requires the saved TLS key and a verified interface constraint, not merely a matching Bonjour UUID. JSON reports omit credentials and literal IPv6 link-local addresses.
+
+The runtime harness checks that preservation while both trusted and untrusted probes run, then exercises fallback and authenticated return to Ethernet:
+
+```sh
+python3 Tools/test_direct_link_runtime.py \
+  --socket /absolute/authenticated/control --address IMAC_IP --user IMAC_USER \
+  --output work/direct-link-test/unique-runtime --build 56 \
+  --wired-interface en0 --fallback-interface en1
+```
+
+This harness requires an already discoverable fallback interface and the existing test account's Viewer startup preference to be disabled; it refuses to manufacture those conditions. It relaunches Viewer with an explicit local test-command directory, **simulates an unavailable route without disabling an interface**, checks fullscreen recovery and automatic preferred-route return, then restores an ordinary Viewer launch. It checks that the active stream survives both no-Hello probes, Host stays running during route recovery, company configuration and pairing remain unchanged, and the UI capture helper stays off. Reports distinguish simulated failure from physical cable removal; running the command is not itself a validation result.
+
+The UGREEN CM888 hub is not yet available for testing. Physical direct-cable operation without DHCP and actual unplug/replug recovery remain pending. Existing-company-Ethernet link-local checks cannot establish that traffic bypasses the company switch or demonstrate stable physical 5K 60 fps.
