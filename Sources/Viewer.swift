@@ -28,6 +28,7 @@ final class ViewerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
     var routeCandidates:[DirectLinkCandidate] = [], activeCandidate:DirectLinkCandidate?
     var routePolicy = DirectLinkRoutePolicy(), probePolicy = DirectLinkRoutePolicy(), routeProbe:Link?
     var verifiedPreferredKey:String?
+    var verifiedPreferredUntil:Double = 0
     var intentionalHandoverConnectionID:String?
     var lastProbeResult:[String:Any] = [:]
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -109,10 +110,21 @@ final class ViewerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
             let candidate:DirectLinkCandidate?
             if directConnection, LaunchOptions.value("--native-host-address") == nil {
                 let now = ProcessInfo.processInfo.systemUptime
-                if let key = verifiedPreferredKey, let preferred = routeCandidates.first(where:{$0.key == key}), routePolicy.eligible(key,now:now) {
-                    candidate = routePolicy.select([preferred],now:now)
+                if let key = verifiedPreferredKey {
+                    if let preferred = routeCandidates.first(where:{$0.key == key}), routePolicy.eligible(key,now:now),
+                       let selected = routePolicy.select([preferred],now:now) {
+                        candidate = selected; verifiedPreferredKey = nil; verifiedPreferredUntil = 0
+                    } else if now < verifiedPreferredUntil {
+                        // Host briefly republishes Bonjour when the old stream
+                        // closes. Retain the authenticated choice until its
+                        // fresh scoped record returns, with a bounded fallback.
+                        showStandby("Reconnecting over Ethernet…",detail:"Your display stays paired. Waiting for the preferred connection to return.",phase:"reconnecting")
+                        scheduleReconnect(); return
+                    } else {
+                        verifiedPreferredKey = nil; verifiedPreferredUntil = 0
+                        candidate = routePolicy.select(routeCandidates,now:now)
+                    }
                 } else { candidate = routePolicy.select(routeCandidates,now:now) }
-                verifiedPreferredKey = nil
             } else { candidate = nil }
             if directConnection, LaunchOptions.value("--native-host-address") == nil,
                candidate == nil, !routeCandidates.isEmpty {
@@ -218,6 +230,7 @@ final class ViewerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
                             UserDefaults.standard.removeObject(forKey:"nativeHostAddress.v1")
                             self.nativeDiscovery.stop()
                             self.routeProbe?.cancel(); self.routeProbe = nil; self.routeCandidates.removeAll(); self.activeCandidate = nil
+                            self.verifiedPreferredKey = nil; self.verifiedPreferredUntil = 0
                             self.intentionalHandoverConnectionID = nil
                             peer.send(9,data) { DispatchQueue.main.async {
                                 self.link = nil; peer.cancel(); self.connected = false; self.receivedFrame = false
@@ -284,11 +297,13 @@ final class ViewerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         nativeDiscovery.onChange = { [weak self] results in
             guard let self = self, let result = results.first else { return }
             self.nativeHostAddress = result.address
-            if self.link == nil { self.connect() }
+            if self.link == nil, self.reconnect == nil { self.connect() }
         }
         nativeDiscovery.onCandidates = { [weak self] candidates in
             guard let self = self else { return }; self.routeCandidates = candidates
-            if self.link == nil { self.connect() } else { self.considerPreferredConnection() }
+            if self.link == nil {
+                if self.reconnect == nil { self.connect() }
+            } else { self.considerPreferredConnection() }
         }
         nativeDiscovery.start(type:serviceType,hostID:binding.hostID)
     }
@@ -314,7 +329,9 @@ final class ViewerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
             self.lastProbeResult = ["success":true,"identityMatched":true,"requiredInterfaceVerified":true,
                 "selectedInterface":candidate.interfaceName,"connectionPath":DirectLinkPath.metadata(connection:probe.connection,candidate:candidate)]
             self.routePolicy.succeeded(candidate.key); self.probePolicy.succeeded(candidate.key)
-            self.verifiedPreferredKey = candidate.key; self.routeProbe = nil
+            self.verifiedPreferredKey = candidate.key
+            self.verifiedPreferredUntil = ProcessInfo.processInfo.systemUptime+15
+            self.routeProbe = nil
             probe.cancel() // No Hello: this probe never claims the Host stream.
             // Keep the old stream until the preferred endpoint has passed TLS.
             // Then use normal reconnect, which resets frame/keyframe state.

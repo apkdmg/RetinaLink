@@ -364,7 +364,7 @@ def main():
     parser.add_argument('--address', required=True)
     parser.add_argument('--user', required=True)
     parser.add_argument('--output', type=Path, required=True)
-    parser.add_argument('--build', default='57')
+    parser.add_argument('--build', default='58')
     parser.add_argument('--wired-interface', default='en0')
     parser.add_argument('--fallback-interface', default='en1')
     args = parser.parse_args()
