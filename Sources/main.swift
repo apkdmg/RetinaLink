@@ -10,6 +10,9 @@ if LaunchOptions.has("--native-test-harness") {
 if LaunchOptions.has("--native-pairing-test") {
     do { try runNativeTests(); exit(0) } catch { fputs("FAIL: \(error)\n",stderr); exit(1) }
 }
+if LaunchOptions.has("--direct-link-probe") {
+    do { try runDirectLinkProbe(); exit(0) } catch { fputs("\(error)\n",stderr); exit(1) }
+}
 
 #if !HOST
 if LaunchOptions.has("--device-status") {

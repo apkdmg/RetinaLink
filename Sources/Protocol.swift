@@ -302,11 +302,7 @@ final class Link {
     private var readOrdinal:UInt64=0,frameOrdinal:UInt64=0
     init(_ c: NWConnection) { connection = c }
     var pathLabel: String {
-        guard let p = connection.currentPath else { return "Connecting" }
-        if p.usesInterfaceType(.wifi) { return "Wi-Fi" }
-        if p.usesInterfaceType(.wiredEthernet) { return "Wired network" }
-        if p.usesInterfaceType(.loopback) { return "Local test" }
-        return "IP network"
+        DirectLinkPath.metadata(connection:connection)["connection"] as? String ?? "Connecting"
     }
     func start() {
         connection.stateUpdateHandler = { [weak self] state in
@@ -320,6 +316,9 @@ final class Link {
             }
         }
         connection.start(queue: queue)
+        connection.viabilityUpdateHandler = { [weak self] viable in
+            if !viable { self?.finish("Connection unavailable. Reconnecting automatically…") }
+        }
         queue.asyncAfter(deadline: .now()+15) { [weak self] in
             guard let self = self, self.connection.state != .ready, !self.closed else { return }
             self.finish("Connection timed out. Check the address, pairing mode/code and Local Network permission.")
@@ -350,7 +349,7 @@ final class Link {
     func cancel(reason: String = "Disconnected") { queue.async { [weak self] in self?.finish(reason) } }
     private func finish(_ reason: String) {
         guard !closed else { return }; closed = true
-        connection.stateUpdateHandler = nil; connection.cancel(); onClose?(reason)
+        connection.stateUpdateHandler = nil; connection.viabilityUpdateHandler = nil; connection.cancel(); onClose?(reason)
         onReady = nil; onMessage = nil; onClose = nil; acknowledgementHandler = nil
         sendTimingHandler = nil; onReceiveTiming = nil
     }

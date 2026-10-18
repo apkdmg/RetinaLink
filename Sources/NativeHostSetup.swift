@@ -69,7 +69,11 @@ final class NativeHostSetup:NSObject,NSWindowDelegate {
         let target = address.stringValue.trimmingCharacters(in:.whitespacesAndNewlines)
         guard DeviceBinding.validAddress(target) else { result.stringValue = "Select your iMac or enter its local address."; return }
         let tcp = NWProtocolTCP.Options(); tcp.noDelay = true; tcp.connectionTimeout = 8
-        let connection = NWConnection(to:.hostPort(host:NWEndpoint.Host(target),port:NWEndpoint.Port(rawValue:targetPort)!),using:NWParameters(tls:nil,tcp:tcp))
+        let parameters = NWParameters(tls:nil,tcp:tcp)
+        let candidate = found.first {$0.address == target && $0.port == targetPort}?.candidate
+        candidate?.apply(to:parameters)
+        let endpoint = candidate?.endpoint ?? .hostPort(host:NWEndpoint.Host(target),port:NWEndpoint.Port(rawValue:targetPort)!)
+        let connection = NWConnection(to:endpoint,using:parameters)
         let session = NativePairSession(connection:connection,identity:NativePeer.current(role:"host")); self.session = session
         stage = "connecting"; continueButton.isEnabled = false
         result.stringValue = "Connecting to Viewer. No iMac account password or Remote Login is needed…"

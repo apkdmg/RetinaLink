@@ -20,6 +20,8 @@ func pump(until condition: () -> Bool, timeout: Double = 10) throws {
 func runSelfTests() throws {
     try runSetupTests()
     try runNativeTests()
+    try runDirectLinkTests()
+    try runDirectLinkSafetyTests()
     for valid in ["http://127.0.0.1:58475", "http://127.0.0.1:58475/"] {
         try check(UpdateSettings.validTestBase(valid),"Local update test origin rejected")
     }

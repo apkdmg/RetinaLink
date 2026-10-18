@@ -25,6 +25,10 @@ final class ViewerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
     let nativeDiscovery = NativeDiscovery(), nativeSetup = NativeViewerSetup()
     var nativeHostAddress:String?
     var directConnection = false
+    var routeCandidates:[DirectLinkCandidate] = [], activeCandidate:DirectLinkCandidate?
+    var routePolicy = DirectLinkRoutePolicy(), probePolicy = DirectLinkRoutePolicy(), routeProbe:Link?
+    var verifiedPreferredKey:String?
+    var lastProbeResult:[String:Any] = [:]
     func applicationDidFinishLaunching(_ notification: Notification) {
         installMenu(); addMaintenanceMenu()
         do { try DedicatedViewerStartup.applyPendingEnrollment() }
@@ -42,7 +46,9 @@ final class ViewerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         nativeSetup.onPaired = { [weak self] in self?.startNativeDiscovery(); self?.softwareUpdater.start(); self?.connect() }
         if DeviceSettings.binding == nil { nativeSetup.start() } else { startNativeDiscovery() }
         DiagnosticLog.shared.record("launch","Viewer appliance ready; fullscreen and automatic reconnection; UI capture helper unused")
-        uiTimer = Timer.scheduledTimer(withTimeInterval:1,repeats:true) { [weak self] _ in self?.publishState() }
+        uiTimer = Timer.scheduledTimer(withTimeInterval:1,repeats:true) { [weak self] _ in
+            self?.consumeDirectLinkTestCommand(); self?.considerPreferredConnection(); self?.publishState()
+        }
         NSWorkspace.shared.notificationCenter.addObserver(self,selector:#selector(woke),name:NSWorkspace.didWakeNotification,object:nil)
         if automatic { connect() }
         softwareUpdater.onChange = { [weak self] status in
@@ -99,22 +105,34 @@ final class ViewerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 credential = try normalizedCode(saved)
             } else { return }
             directConnection = binding != nil && !LaunchOptions.has("--legacy-ssh-transport")
+            let candidate:DirectLinkCandidate?
+            if directConnection, LaunchOptions.value("--native-host-address") == nil {
+                let now = ProcessInfo.processInfo.systemUptime
+                if let key = verifiedPreferredKey, let preferred = routeCandidates.first(where:{$0.key == key}), routePolicy.eligible(key,now:now) {
+                    candidate = routePolicy.select([preferred],now:now)
+                } else { candidate = routePolicy.select(routeCandidates,now:now) }
+                verifiedPreferredKey = nil
+            } else { candidate = nil }
             let address:String
             if binding == nil { address = UserDefaults.standard.string(forKey:"viewerAddress") ?? "" }
             else if directConnection {
-                guard let resolved = nativeHostAddress ?? NativeConnectionSettings.hostAddress else {
+                if let resolved = nativeHostAddress ?? NativeConnectionSettings.hostAddress { address = resolved }
+                else if candidate != nil { address = "" } // Typed service endpoint needs no cached IP/hostname.
+                else {
                     showStandby("Waiting for your Mac…",detail:"Viewer finds your trusted Mac on the local network. Remote Login is not needed.",phase:"waiting")
                     scheduleReconnect(); return
                 }
-                address = resolved
             } else { address = "127.0.0.1" }
-            guard DeviceBinding.validAddress(address) else { throw LinkError.invalid("Set up this display from your main Mac.") }
+            guard candidate != nil || DeviceBinding.validAddress(address) else { throw LinkError.invalid("Set up this display from your main Mac.") }
             let view = try DisplayView(viewer:true); view.translatesAutoresizingMaskIntoConstraints = false
             display?.removeFromSuperview(); display = view
             container.addSubview(view,positioned:.below,relativeTo:standby)
             NSLayoutConstraint.activate([view.leadingAnchor.constraint(equalTo:container.leadingAnchor),view.trailingAnchor.constraint(equalTo:container.trailingAnchor),view.topAnchor.constraint(equalTo:container.topAnchor),view.bottomAnchor.constraint(equalTo:container.bottomAnchor)])
             view.isHidden = false; receivedFrame = false; paused = false
-            let peer = Link(NWConnection(to:.hostPort(host:NWEndpoint.Host(address),port:NWEndpoint.Port(rawValue:defaultPort)!),using:try networkParameters(credential)))
+            let parameters = try networkParameters(credential); candidate?.apply(to:parameters)
+            let endpoint = candidate?.endpoint ?? .hostPort(host:NWEndpoint.Host(address),port:NWEndpoint.Port(rawValue:defaultPort)!)
+            let peer = Link(NWConnection(to:endpoint,using:parameters))
+            activeCandidate = candidate
             link = peer; activity = StreamingActivity()
             let credits = DispatchSemaphore(value:3), statistics = ViewerStatistics()
             let announcementLock = NSLock(); var announcedFirstFrame = false
@@ -124,12 +142,21 @@ final class ViewerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
             peer.onReady = { [weak self,weak peer] in
                 guard let peer = peer else { return }
                 FrameTrace.shared.event("viewer_session",fields:["link":peer.traceID,"view":view.traceID])
-                let hello = Hello(version:1,bc7:true,name:Host.current().localizedName ?? "iMac",maxFramesInFlight:3,chunkedPacking:true,appVersion:LaunchOptions.version,appBuild:LaunchOptions.build,automaticUpdates:true,directConnection:self?.directConnection == true)
-                if let data = try? JSONEncoder().encode(hello) { peer.send(1,data) }
                 DispatchQueue.main.async {
                     guard let self = self, self.link === peer else { return }
+                    if let candidate = candidate, !DirectLinkPath.requiredInterfaceVerified(connection:peer.connection,candidate:candidate) {
+                        self.routePolicy.failed(candidate.key,now:ProcessInfo.processInfo.systemUptime)
+                        peer.cancel(reason:"The selected Ethernet route changed. Trying another connection…"); return
+                    }
+                    let hello = Hello(version:1,bc7:true,name:Host.current().localizedName ?? "iMac",maxFramesInFlight:3,chunkedPacking:true,appVersion:LaunchOptions.version,appBuild:LaunchOptions.build,automaticUpdates:true,directConnection:self.directConnection)
+                    if let data = try? JSONEncoder().encode(hello) { peer.send(1,data) }
+                    if let candidate = candidate { self.routePolicy.succeeded(candidate.key) }
                     self.connected = true
                     if self.directConnection { NativeConnectionSettings.enable(); NativeConnectionSettings.rememberHost(address) }
+                    let path = DirectLinkPath.metadata(connection:peer.connection,candidate:candidate)
+                    if let data = try? JSONSerialization.data(withJSONObject:path,options:.sortedKeys), let text = String(data:data,encoding:.utf8) {
+                        DiagnosticLog.shared.record("connection-path",text)
+                    }
                     self.showStandby("Connected to \(binding?.hostName ?? "your Mac")",detail:"Preparing your extended desktop…",phase:"connected")
                     DiagnosticLog.shared.record("state","Connected · encrypted · \(binding == nil ? "legacy pairing" : "trusted device")")
                 }
@@ -182,6 +209,7 @@ final class ViewerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
                             UserDefaults.standard.removeObject(forKey:"nativeConnectionEnabled.v1")
                             UserDefaults.standard.removeObject(forKey:"nativeHostAddress.v1")
                             self.nativeDiscovery.stop()
+                            self.routeProbe?.cancel(); self.routeProbe = nil; self.routeCandidates.removeAll(); self.activeCandidate = nil
                             peer.send(9,data) { DispatchQueue.main.async {
                                 self.link = nil; peer.cancel(); self.connected = false; self.receivedFrame = false
                                 self.statsTimer?.invalidate(); self.statsTimer = nil; self.activity = nil
@@ -210,6 +238,8 @@ final class ViewerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
             view.onError = { [weak peer] text in peer?.cancel(reason:text) }
             peer.onClose = { [weak self,weak peer] reason in DispatchQueue.main.async {
                 guard let self = self, self.link === peer else { return }
+                if let candidate = candidate { self.routePolicy.failed(candidate.key,now:ProcessInfo.processInfo.systemUptime) }
+                self.routeProbe?.cancel(); self.routeProbe = nil; self.activeCandidate = nil
                 self.link = nil; self.connected = false; self.activity = nil; self.statsTimer?.invalidate(); self.statsTimer = nil
                 self.receivedFrame = false; self.display?.removeFromSuperview(); self.display = nil
                 DiagnosticLog.shared.record("state",reason)
@@ -241,7 +271,61 @@ final class ViewerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
             self.nativeHostAddress = result.address
             if self.link == nil { self.connect() }
         }
+        nativeDiscovery.onCandidates = { [weak self] candidates in
+            guard let self = self else { return }; self.routeCandidates = candidates
+            if self.link == nil { self.connect() } else { self.considerPreferredConnection() }
+        }
         nativeDiscovery.start(type:serviceType,hostID:binding.hostID)
+    }
+    func considerPreferredConnection() {
+        guard automatic, !terminating, connected, directConnection, !paused, routeProbe == nil,
+              LaunchOptions.value("--native-host-address") == nil, DeviceSettings.binding != nil,
+              let current = link else { return }
+        let now = ProcessInfo.processInfo.systemUptime
+        let currentRank = routeCandidates.first {$0.key == activeCandidate?.key}?.rank ?? activeCandidate?.rank
+        let preferred = routeCandidates.filter { routePolicy.mayProbe(key:$0.key,rank:$0.rank,wired:$0.wired,activeKey:activeCandidate?.key,activeRank:currentRank,now:now) }
+        guard let candidate = probePolicy.select(preferred,now:now),
+              let credential = try? DeviceVault.credential(), !credential.isEmpty,
+              let parameters = try? networkParameters(credential) else { return }
+        routePolicy.reserveProbe(now:now); candidate.apply(to:parameters)
+        let probe = Link(NWConnection(to:candidate.endpoint,using:parameters)); routeProbe = probe
+        probe.onReady = { [weak self,weak probe,weak current] in DispatchQueue.main.async {
+            guard let self = self, let probe = probe, let current = current, self.routeProbe === probe,
+                  self.link === current, self.connected, self.automatic, !self.terminating, !self.paused,
+                  self.routeCandidates.contains(where:{$0.key == candidate.key}) else { probe?.cancel(); return }
+            guard DirectLinkPath.requiredInterfaceVerified(connection:probe.connection,candidate:candidate) else {
+                self.routePolicy.failed(candidate.key,now:ProcessInfo.processInfo.systemUptime); probe.cancel(); self.routeProbe = nil; return
+            }
+            self.lastProbeResult = ["success":true,"identityMatched":true,"requiredInterfaceVerified":true,
+                "selectedInterface":candidate.interfaceName,"connectionPath":DirectLinkPath.metadata(connection:probe.connection,candidate:candidate)]
+            self.routePolicy.succeeded(candidate.key); self.probePolicy.succeeded(candidate.key)
+            self.verifiedPreferredKey = candidate.key; self.routeProbe = nil
+            probe.cancel() // No Hello: this probe never claims the Host stream.
+            // Keep the old stream until the preferred endpoint has passed TLS.
+            // Then use normal reconnect, which resets frame/keyframe state.
+            current.cancel(reason:"Using the preferred Ethernet connection…")
+        } }
+        probe.onClose = { [weak self,weak probe] _ in DispatchQueue.main.async {
+            guard let self = self, self.routeProbe === probe else { return }
+            self.routePolicy.failed(candidate.key,now:ProcessInfo.processInfo.systemUptime)
+            self.probePolicy.failed(candidate.key,now:ProcessInfo.processInfo.systemUptime); self.routeProbe = nil
+        } }
+        probe.start()
+    }
+    func consumeDirectLinkTestCommand() {
+        // Local, explicit test launch only; no network command can invoke this.
+        guard let directory = LaunchOptions.value("--direct-link-test-control-directory") else { return }
+        let file = URL(fileURLWithPath:directory).appendingPathComponent("command.json")
+        guard let data = try? Data(contentsOf:file), data.count <= 1024,
+              let item = try? JSONSerialization.jsonObject(with:data) as? [String:String] else { return }
+        try? FileManager.default.removeItem(at:file)
+        switch item["command"] {
+        case "fail-active-route":
+            if let candidate = activeCandidate { routePolicy.failed(candidate.key,now:ProcessInfo.processInfo.systemUptime) }
+            link?.cancel(reason:"Simulated unavailable interface for the local recovery test")
+        case "retry-best-route": routePolicy = DirectLinkRoutePolicy(); probePolicy = DirectLinkRoutePolicy(); considerPreferredConnection()
+        default: break
+        }
     }
     @objc func woke() { if link == nil { connect() }; if desiredFullscreen, let frame = NSScreen.main?.frame { window.setFrame(frame,display:true); window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps:true) } }
     func publishState() {
@@ -252,7 +336,9 @@ final class ViewerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
             "systemUIAutoHidden":NSApp.presentationOptions.contains(.autoHideDock) && NSApp.presentationOptions.contains(.autoHideMenuBar),
             "standbyVisible":standby?.isHidden == false,"automaticReconnect":automatic,"displayWindows":window == nil ? 0 : 1,
             "startupInstalled":FileManager.default.fileExists(atPath:StartupAgent.path(role:"Viewer").path),
-            "transport":directConnection ? "direct-tls" : "legacy", "requiresRemoteLogin":!directConnection,
+            "transport":directConnection ? "direct-tls" : "legacy", "requiresRemoteLogin":!directConnection,"connectionID":link?.traceID ?? "",
+            "connectionPath":link.map { DirectLinkPath.metadata(connection:$0.connection,candidate:activeCandidate) } ?? [:],
+            "discoveredRoutes":routeCandidates.map(\.metadata),"lastPreferredRouteProbe":lastProbeResult,
             "time":Date().timeIntervalSince1970,"windowFrame":NSStringFromRect(window?.frame ?? .zero)]
         if let data = try? JSONSerialization.data(withJSONObject:state,options:.sortedKeys) { try? data.write(to:URL(fileURLWithPath:path),options:.atomic); try? FileManager.default.setAttributes([.posixPermissions:0o600],ofItemAtPath:path) }
     }
@@ -277,6 +363,6 @@ final class ViewerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
     func windowShouldClose(_ sender: NSWindow) -> Bool { if automatic { window.orderOut(nil); return false }; return true }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
-    func applicationWillTerminate(_ notification: Notification) { nativeSetup.stop(); nativeDiscovery.stop(); DedicatedViewerStartup.release(); terminating = true; automatic = false; reconnect?.cancel(); statsTimer?.invalidate(); uiTimer?.invalidate(); link?.cancel() }
+    func applicationWillTerminate(_ notification: Notification) { nativeSetup.stop(); nativeDiscovery.stop(); DedicatedViewerStartup.release(); terminating = true; automatic = false; reconnect?.cancel(); statsTimer?.invalidate(); uiTimer?.invalidate(); routeProbe?.cancel(); link?.cancel() }
 }
 #endif

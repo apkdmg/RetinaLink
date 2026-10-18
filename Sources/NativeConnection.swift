@@ -29,16 +29,24 @@ enum NativePendingSetup {
 // All delegate callbacks are on the main run loop. Names/addresses are hints;
 // only the TLS credential or the two-screen approval can authenticate a peer.
 final class NativeDiscovery:NSObject,NetServiceBrowserDelegate,NetServiceDelegate {
-    struct Result { let name:String; let address:String; let port:UInt16; let id:String }
+    struct Result { let name:String; let address:String; let port:UInt16; let id:String; var candidate:DirectLinkCandidate? = nil }
     let browser = NetServiceBrowser()
+    let scoped = DirectLinkDiscovery()
     var services:[NetService] = [], results:[Result] = []
     var onChange:(([Result])->Void)?
+    var onCandidates:(([DirectLinkCandidate])->Void)?
     private var type = "", hostID:String?
     func start(type:String,hostID:String? = nil) {
         stop(); self.type = type; self.hostID = hostID
+        scoped.onChange = { [weak self] candidates in
+            guard let self = self else { return }
+            for index in self.results.indices { self.results[index].candidate = candidates.first {$0.id == self.results[index].id} }
+            self.onCandidates?(candidates); self.onChange?(self.results)
+        }
+        scoped.start(type:type,identityKey:type == serviceType ? "hostID" : "viewerID",matchingIdentity:hostID)
         browser.delegate = self; browser.searchForServices(ofType:type,inDomain:"local.")
     }
-    func stop() { browser.stop(); services.forEach {$0.stop()}; services.removeAll(); results.removeAll() }
+    func stop() { scoped.stop(); browser.stop(); services.forEach {$0.stop()}; services.removeAll(); results.removeAll() }
     func netServiceBrowser(_ browser:NetServiceBrowser,didFind service:NetService,moreComing:Bool) {
         guard services.count < 32 else { return }; services.append(service); service.delegate = self; service.resolve(withTimeout:5)
     }
@@ -52,7 +60,7 @@ final class NativeDiscovery:NSObject,NetServiceBrowserDelegate,NetServiceDelegat
         let key = type == serviceType ? "hostID" : "viewerID"
         guard let data = txt[key], let id = String(data:data,encoding:.utf8), UUID(uuidString:id) != nil,
               hostID == nil || id == hostID else { return }
-        results.removeAll {$0.id == id}; results.append(Result(name:String(sender.name.prefix(160)),address:host,port:UInt16(sender.port),id:id))
+        results.removeAll {$0.id == id}; results.append(Result(name:String(sender.name.prefix(160)),address:host,port:UInt16(sender.port),id:id,candidate:scoped.candidates.first {$0.id == id}))
         onChange?(results.sorted {$0.name.localizedStandardCompare($1.name) == .orderedAscending})
     }
     deinit { browser.stop(); services.forEach {$0.stop()} }

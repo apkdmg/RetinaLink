@@ -361,7 +361,7 @@ final class HostApp: NSObject, NSApplicationDelegate {
         let add = Design.button("Add Display",target:self,action:#selector(addDisplay),primary:true)
         let spacer = NSView(); spacer.setContentHuggingPriority(.defaultLow,for:.horizontal)
         let heading = horizontal([Design.vertical([Design.text("Your displays",30,.bold),Design.text("Set up once. Connect effortlessly.",14,secondary:true)],spacing:7),spacer,add])
-        let automatic = Design.card([Design.message("Always ready, after sign-in",detail:"Viewer opens fullscreen and reconnects to this Mac automatically. No pairing codes or controls are needed on the iMac.",symbol:"arrow.triangle.2.circlepath"),restartNote,
+        let automatic = Design.card([Design.message("Always ready, after sign-in",detail:"Viewer opens fullscreen and reconnects automatically. Plug in an Ethernet cable and RetinaLink prefers it using automatic addressing. Company network settings stay unchanged.",symbol:"arrow.triangle.2.circlepath"),restartNote,
             horizontal([Design.button("Display Setup…",target:self,action:#selector(addDisplay)),Design.button("Dedicated Display Guide…",target:self,action:#selector(dedicatedGuide))])])
         updateButton = Design.button("Update Display Software…",target:self,action:#selector(updateViewerSoftware))
         let details = Design.card([Design.text("Connection details",17,.semibold),Design.text("Native 5K at a target of 60 updates/s. Actual performance depends on capture and network conditions.",12,secondary:true),status,profiles,stats,updateButton!,
@@ -413,9 +413,9 @@ final class HostApp: NSObject, NSApplicationDelegate {
             button?.title = "Set Up Display"; button?.action = #selector(addDisplay)
             if listener == nil && link == nil { homeStatus.stringValue = "Ready for setup from this Mac" }
         }
-        if let path = LaunchOptions.value("--ui-state-path") {
-            let state: [String:Any] = ["version":LaunchOptions.version,"build":LaunchOptions.build,"pid":ProcessInfo.processInfo.processIdentifier,"trusted":reconnectEnabled,"paused":displayPaused,"listening":listener != nil,"streaming":capture != nil && helloReceived,"setupStage":nativeSetupController?.stage ?? setupController?.stage ?? "closed","fileVault":DeviceSettings.binding?.fileVault.rawValue ?? "unknown","transport":NativeConnectionSettings.enabled ? "direct-tls" : "legacy-ssh","requiresRemoteLogin":!NativeConnectionSettings.enabled,"time":Date().timeIntervalSince1970]
-            if let data = try? JSONSerialization.data(withJSONObject:state,options:.sortedKeys) { try? data.write(to:URL(fileURLWithPath:path),options:.atomic) }
+        if let path = LaunchOptions.value("--ui-state-path") ?? Optional(NSHomeDirectory()+"/Library/Logs/RetinaLink/Host-ui.json") {
+            let state: [String:Any] = ["version":LaunchOptions.version,"build":LaunchOptions.build,"pid":ProcessInfo.processInfo.processIdentifier,"trusted":reconnectEnabled,"paused":displayPaused,"listening":listener != nil,"streaming":capture != nil && helloReceived,"setupStage":nativeSetupController?.stage ?? setupController?.stage ?? "closed","fileVault":DeviceSettings.binding?.fileVault.rawValue ?? "unknown","transport":NativeConnectionSettings.enabled ? "direct-tls" : "legacy-ssh","requiresRemoteLogin":!NativeConnectionSettings.enabled,"connectionID":link?.traceID ?? "","provisionalConnections":pending.count,"connectionPath":link.map { DirectLinkPath.metadata(connection:$0.connection) } ?? [:],"networkSettingsChanged":false,"time":Date().timeIntervalSince1970]
+            if let data = try? JSONSerialization.data(withJSONObject:state,options:.sortedKeys) { try? data.write(to:URL(fileURLWithPath:path),options:.atomic); try? FileManager.default.setAttributes([.posixPermissions:0o600],ofItemAtPath:path) }
         }
     }
     func consumeTestCommand() {
@@ -643,23 +643,33 @@ final class HostApp: NSObject, NSApplicationDelegate {
         } catch { status.stringValue = String(describing:error) }
     }
     func accept(_ connection: NWConnection) {
-        guard link == nil, pending.count < 4 else { connection.cancel(); return }
+        // A preferred-route probe may authenticate while the current display
+        // keeps streaming. It cannot claim the display without a valid Hello.
+        guard listener != nil, !stopping, pending.count < 4 else { connection.cancel(); return }
         let peer = Link(connection), id = ObjectIdentifier(connection); pending[id] = peer
         peer.onReady = { [weak self,weak peer] in
             DispatchQueue.main.async {
                 guard let self = self, let peer = peer else { return }
-                guard self.link == nil, self.listener != nil else { peer.cancel(); return }
-                self.pending.removeValue(forKey:id); self.link = peer; self.helloReceived = false
-                for other in self.pending.values { other.cancel() }; self.pending.removeAll()
-                self.status.stringValue = "\(self.connectionLabel) · \(peer.pathLabel)"
+                guard self.pending[id] === peer, self.listener != nil, !self.stopping else { peer.cancel(); return }
                 DispatchQueue.main.asyncAfter(deadline:.now()+10) { [weak self,weak peer] in
-                    guard let self = self, self.link === peer, !self.helloReceived else { return }; peer?.cancel()
+                    guard let self = self, let peer = peer, self.pending[id] === peer else { return }; peer.cancel()
                 }
             }
         }
         peer.onMessage = { [weak self,weak peer] type,data in
             DispatchQueue.main.async {
-                guard let self = self, let peer = peer, self.link === peer else { return }
+                guard let self = self, let peer = peer else { return }
+                if self.pending[id] === peer {
+                    guard self.link == nil, self.listener != nil, !self.stopping, type == 1, data.count < 4096,
+                          let hello = try? JSONDecoder().decode(Hello.self,from:data),
+                          hello.version == 1, hello.bc7, (try? hello.frameLimit()) != nil else {
+                        peer.cancel(reason:"The Host already has a display connection, or the greeting was invalid."); return
+                    }
+                    self.pending.removeValue(forKey:id); self.link = peer; self.helloReceived = false
+                    for other in self.pending.values { other.cancel() }; self.pending.removeAll()
+                    self.status.stringValue = "\(self.connectionLabel) · \(peer.pathLabel)"
+                }
+                guard self.link === peer else { return }
                 if type == 1, !self.helloReceived {
                     do {
                         guard data.count < 4096 else { throw LinkError.invalid("Invalid Viewer greeting") }
@@ -674,7 +684,7 @@ final class HostApp: NSObject, NSApplicationDelegate {
                             let migrating = !NativeConnectionSettings.enabled
                             NativeConnectionSettings.enable(); self.tunnel?.stop(disconnect:true); self.tunnel = nil
                             if migrating { DispatchQueue.global(qos:.utility).async { TunnelSupervisor.disconnectExisting() } }
-                            self.connectionNote.stringValue = "Encrypted app connection · Remote Login is not needed"
+                            self.connectionNote.stringValue = "\(peer.pathLabel) · encrypted · network settings unchanged"
                             DiagnosticLog.shared.record("transport","Direct authenticated TLS; SSH display tunnel stopped; pairing unchanged")
                         }
                         self.viewerUpdateNote.stringValue = "iMac: RetinaLink \(hello.appVersion ?? "earlier release") · build \(hello.appBuild ?? "unknown")"
