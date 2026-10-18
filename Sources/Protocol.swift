@@ -12,6 +12,24 @@ enum LinkError: Error, CustomStringConvertible {
     case invalid(String)
     var description: String { if case .invalid(let s) = self { return s }; return "Invalid data" }
 }
+// Nonblocking receive capacity, not a synchronization wait. A disconnected
+// DisplayView may drop unfinished frame callbacks, so destruction must allow
+// outstanding credits instead of requiring semaphore signals during teardown.
+final class ReceiveCredits {
+    private let lock = NSLock()
+    private let capacity:Int
+    private var used = 0
+    init(capacity:Int) { precondition(capacity > 0); self.capacity = capacity }
+    func reserve()->Bool {
+        lock.lock(); defer { lock.unlock() }
+        guard used < capacity else { return false }
+        used += 1; return true
+    }
+    func release() {
+        lock.lock(); defer { lock.unlock() }
+        if used > 0 { used -= 1 }
+    }
+}
 extension Data {
     mutating func put32(_ x: UInt32) { var v = x.bigEndian; Swift.withUnsafeBytes(of: &v) { append(contentsOf: $0) } }
     mutating func put64(_ x: UInt64) { var v = x.bigEndian; Swift.withUnsafeBytes(of: &v) { append(contentsOf: $0) } }

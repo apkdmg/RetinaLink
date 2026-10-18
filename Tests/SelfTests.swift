@@ -22,6 +22,7 @@ func runSelfTests() throws {
     try runNativeTests()
     try runDirectLinkTests()
     try runDirectLinkSafetyTests()
+    try testReceiveCredits()
     for valid in ["http://127.0.0.1:58475", "http://127.0.0.1:58475/"] {
         try check(UpdateSettings.validTestBase(valid),"Local update test origin rejected")
     }
@@ -111,6 +112,41 @@ func runSelfTests() throws {
     if let device = MTLCreateSystemDefaultDevice() { print("GPU: \(device.name); BC textures: \(supportsBC(device))") }
     #endif
     print("ALL SELF-TESTS PASSED")
+}
+
+func testReceiveCredits() throws {
+    // Cancellation can destroy the view while every received frame still owns
+    // a slot. This was fatal with DispatchSemaphore's disposal invariant.
+    weak var discarded:ReceiveCredits?
+    do {
+        let credits = ReceiveCredits(capacity:3); discarded = credits
+        for _ in 0..<3 { try check(credits.reserve(),"Receive capacity rejected an available slot") }
+        try check(!credits.reserve(),"Receive capacity accepted a fourth queued frame")
+    }
+    try check(discarded == nil,"Cancelled receive capacity was retained after teardown")
+
+    let credits = ReceiveCredits(capacity:3), countLock = NSLock()
+    var accepted = 0
+    DispatchQueue.concurrentPerform(iterations:128) { _ in
+        if credits.reserve() { countLock.lock(); accepted += 1; countLock.unlock() }
+    }
+    try check(accepted == 3,"Concurrent frame receives exceeded or lost the three-slot capacity")
+    for _ in 0..<3 { credits.release() }
+    for _ in 0..<10 { credits.release() }
+    for _ in 0..<3 { try check(credits.reserve(),"Released receive slots could not be reused") }
+    try check(!credits.reserve(),"Extra releases increased the bounded receive capacity")
+
+    weak var retained:ReceiveCredits?
+    var completion:(()->Void)?
+    do {
+        let pending = ReceiveCredits(capacity:3); retained = pending
+        try check(pending.reserve(),"Could not reserve the pending completion's slot")
+        completion = { pending.release() }
+    }
+    try check(retained != nil,"A pending frame completion lost its capacity owner")
+    completion?(); completion = nil
+    try check(retained == nil,"Completed receive capacity leaked after its final callback")
+    print("PASS: cancelled receive teardown with outstanding frames, concurrent three-frame bound and late-completion ownership")
 }
 
 func runSetupTests() throws {

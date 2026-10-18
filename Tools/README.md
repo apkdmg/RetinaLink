@@ -140,10 +140,12 @@ The runtime harness checks that preservation while both trusted and untrusted pr
 ```sh
 python3 Tools/test_direct_link_runtime.py \
   --socket /absolute/authenticated/control --address IMAC_IP --user IMAC_USER \
-  --output work/direct-link-test/unique-runtime --build 58 \
+  --output work/direct-link-test/unique-runtime --build 59 \
   --wired-interface en0 --fallback-interface en1
 ```
 
 This harness requires an already discoverable fallback interface and the existing test account's Viewer startup preference to be disabled; it refuses to manufacture those conditions. It relaunches Viewer with an explicit local test-command directory, **simulates an unavailable route without disabling an interface**, checks fullscreen recovery and automatic preferred-route return, then restores an ordinary Viewer launch. It checks that the active stream survives both no-Hello probes, Host stays running during route recovery, company configuration and pairing remain unchanged, and the UI capture helper stays off. Reports distinguish simulated failure from physical cable removal; running the command is not itself a validation result.
+
+After each diagnostic probe, the harness requires newer Host and Viewer publications with unchanged process and connection IDs; the stored preferred-return probe has no generation or timestamp, so its freshness is not independently verified even though the new interface-bound TLS stream is verified separately.
 
 The UGREEN CM888 hub is not yet available for testing. Physical direct-cable operation without DHCP and actual unplug/replug recovery remain pending. Existing-company-Ethernet link-local checks cannot establish that traffic bypasses the company switch or demonstrate stable physical 5K 60 fps.

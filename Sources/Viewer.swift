@@ -154,7 +154,7 @@ final class ViewerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
             let peer = Link(NWConnection(to:endpoint,using:parameters))
             activeCandidate = candidate
             link = peer; activity = StreamingActivity()
-            let credits = DispatchSemaphore(value:3), statistics = ViewerStatistics()
+            let credits = ReceiveCredits(capacity:3), statistics = ViewerStatistics()
             let announcementLock = NSLock(); var announcedFirstFrame = false
             view.onPresentation = { width,height,time in statistics.presented(width:width,height:height,time:time) }
             view.onActualPresent = { statistics.actualPresentCall($0) }
@@ -197,8 +197,8 @@ final class ViewerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
                         }
                     }
                 } else if type == 2 {
-                    guard credits.wait(timeout:.now()) == .success else { peer.cancel(reason:"Viewer frame queue overflow"); return }
-                    guard let view = view else { credits.signal(); peer.cancel(); return }
+                    guard credits.reserve() else { peer.cancel(reason:"Viewer frame queue overflow"); return }
+                    guard let view = view else { credits.release(); peer.cancel(); return }
                     statistics.received(data.count); view.receive(data)
                 } else if type == 4 {
                     let message = String(data:data.prefix(2048),encoding:.utf8) ?? ""
@@ -244,7 +244,7 @@ final class ViewerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 } else { peer.cancel(reason:"Unknown display message") }
             }
             view.onFrame = { [weak self,weak peer] timing in
-                credits.signal(); statistics.completed(timing)
+                credits.release(); statistics.completed(timing)
                 guard let peer = peer else { return }
                 var ack = Data(); ack.put64(timing.sequence); peer.send(3,ack,traceSequence:timing.sequence)
                 announcementLock.lock(); let announce = !announcedFirstFrame; announcedFirstFrame = true; announcementLock.unlock()

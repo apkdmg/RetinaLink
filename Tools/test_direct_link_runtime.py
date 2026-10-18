@@ -182,8 +182,24 @@ class RuntimeTest:
         after = self.states()
         require(self.identity(after) == identity and self.streaming(after, self.args.wired_interface),
                 label + ' changed the active stream')
+        # A fast successful probe can finish before either one-second UI timer
+        # publishes. Require subsequent publications from both processes before
+        # accepting the unchanged IDs; cached pre-probe state is insufficient.
+        publication_times = {role: state['time'] for role, state in after.items()}
+        publication_deadline = time.monotonic() + 10
+        while True:
+            require(time.monotonic() < publication_deadline,
+                    label + ' did not receive fresh Host and Viewer publications')
+            after = self.states()
+            require(self.identity(after) == identity and self.streaming(after, self.args.wired_interface),
+                    label + ' changed the active stream before fresh UI publication')
+            if all(after[role]['time'] > timestamp for role, timestamp in publication_times.items()):
+                break
+            time.sleep(0.25)
         self.record(label + '-after', after)
         safe = safe_probe(report)
+        safe['activeStreamPublicationsAfterProbeVerified'] = True
+        safe['publicationBaselineTimes'] = publication_times
         safety.write(self.args.output / (label + '.json'), safe)
         print('PASS: ' + label + ' leaves both active connection IDs and process IDs unchanged', flush=True)
         return safe
@@ -258,6 +274,7 @@ class RuntimeTest:
         self.remote('/bin/mkdir -p ' + shlex.quote(self.remote_directory) + ' && /bin/chmod 700 ' + shlex.quote(self.remote_directory))
         report = {'success': False, 'build': self.args.build, 'physicalDirectCableTested': False,
                   'simulatedUnavailableRoute': True, 'networkInterfacesChanged': False,
+                  'preferredReturnProbeFreshnessIndependentlyVerified': False,
                   'systemRemoteLoginDisabledDuringTest': False, 'remoteTestDirectory': self.remote_directory}
         failure = None
         try:
@@ -364,7 +381,7 @@ def main():
     parser.add_argument('--address', required=True)
     parser.add_argument('--user', required=True)
     parser.add_argument('--output', type=Path, required=True)
-    parser.add_argument('--build', default='58')
+    parser.add_argument('--build', default='59')
     parser.add_argument('--wired-interface', default='en0')
     parser.add_argument('--fallback-interface', default='en1')
     args = parser.parse_args()
