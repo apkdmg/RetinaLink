@@ -69,6 +69,21 @@ enum DirectLinkPreference {
     }
 }
 
+enum DirectLinkTXT {
+    // Big Sur can expose hostID in .dictionary while its key subscript and
+    // getEntry(for:) both return nil. Use the compatibility dictionary and DNS
+    // TXT's case-insensitive key semantics, rejecting ambiguous duplicate keys.
+    static func identity(_ record:NWTXTRecord,key:String)->String? {
+        identity(record.dictionary,key:key)
+    }
+    static func identity(_ dictionary:[String:String],key:String)->String? {
+        let matches = dictionary.filter { $0.key.caseInsensitiveCompare(key) == .orderedSame }
+        guard matches.count == 1, let value = matches.first?.value,
+              value.utf8.count <= 64, UUID(uuidString:value) != nil else { return nil }
+        return value
+    }
+}
+
 // Bonjour identity and topology are untrusted transport hints. The caller must
 // authenticate this endpoint with the saved TLS credential before using it or
 // replacing a working connection. Scope/index are deliberately never persisted:
@@ -129,7 +144,7 @@ final class DirectLinkDiscovery {
             // LAN advertisements cannot crowd out this Viewer’s trusted Host.
             let accepted = results.filter { record in
                 guard case .bonjour(let txt) = record.metadata,
-                      let id = txt[self.identityKey], id.utf8.count <= 64, UUID(uuidString:id) != nil,
+                      let id = DirectLinkTXT.identity(txt,key:self.identityKey),
                       self.matchingIdentity == nil || id == self.matchingIdentity else { return false }
                 return true
             }.sorted { String(describing:$0.endpoint) < String(describing:$1.endpoint) }
@@ -170,7 +185,7 @@ final class DirectLinkDiscovery {
         let ordered = records.sorted { String(describing:$0.endpoint) < String(describing:$1.endpoint) }
         for record in ordered {
             guard case .bonjour(let txt) = record.metadata,
-                  let id = txt[identityKey], id.utf8.count <= 64, UUID(uuidString:id) != nil,
+                  let id = DirectLinkTXT.identity(txt,key:identityKey),
                   matchingIdentity == nil || id == matchingIdentity,
                   case .service(let name,let type,let domain,_) = record.endpoint,
                   name.utf8.count <= 256, type.utf8.count <= 256, domain.utf8.count <= 256 else { continue }

@@ -287,12 +287,18 @@ class RuntimeTest:
                                  and s['viewer']['connectionID'] != failed_id, timeout=45)
             report['fallbackSeconds'] = round(time.monotonic() - started, 3)
             fallback_id = fallback['viewer']['connectionID']
+            last_healthy_fallback = [time.monotonic()]
+            def preferred_returned(states):
+                if states['viewer'].get('connectionID') == fallback_id and self.streaming(states, self.args.fallback_interface):
+                    last_healthy_fallback[0] = time.monotonic()
+                return (self.streaming(states, self.args.wired_interface)
+                        and states['viewer']['pid'] == controlled_pid
+                        and states['viewer']['connectionID'] != fallback_id
+                        and states['viewer'].get('lastPreferredRouteProbe', {}).get('success') is True)
             returned = self.wait('automatic authenticated preferred-route probe returns stream to Ethernet',
-                                 lambda s: self.streaming(s, self.args.wired_interface)
-                                 and s['viewer']['pid'] == controlled_pid
-                                 and s['viewer']['connectionID'] != fallback_id
-                                 and s['viewer'].get('lastPreferredRouteProbe', {}).get('success') is True,
+                                 preferred_returned,
                                  timeout=110)
+            returned_at = time.monotonic()
             require(returned['host']['pid'] == host_pid, 'Host restarted during route recovery')
             preferred_probe = returned['viewer'].get('lastPreferredRouteProbe', {})
             require(preferred_probe.get('identityMatched') is True
@@ -302,6 +308,25 @@ class RuntimeTest:
             report['preferredReturnSeconds'] = round(time.monotonic() - started, 3)
             report['preferredReturnProbe'] = safe_probe(preferred_probe)
             report['recoveredFullscreen'] = returned['viewer']['fullscreen']
+            # A healthy Wi-Fi stream closed for a preferred-route upgrade must
+            # not be put into the failed-route cooldown. Exercise its immediate
+            # reuse while that erroneous 30-second cooldown would still apply.
+            second_started = time.monotonic()
+            self.fail_active_route()
+            report['secondFailureAfterPreferredReturnSeconds'] = round(time.monotonic() - returned_at, 3)
+            report['secondFailureAfterLastHealthyBackupSeconds'] = round(time.monotonic() - last_healthy_fallback[0], 3)
+            require(report['secondFailureAfterLastHealthyBackupSeconds'] < 30,
+                    'The second simulated failure missed the healthy-backup cooldown regression window')
+            second_fallback = self.wait('healthy fallback is immediately reusable after preferred-route upgrade',
+                                        lambda s: self.streaming(s, self.args.fallback_interface)
+                                        and s['viewer']['pid'] == controlled_pid and s['host']['pid'] == host_pid
+                                        and s['viewer']['connectionID'] != returned['viewer']['connectionID']
+                                        and s['host']['connectionID'] != returned['host']['connectionID'],
+                                        timeout=max(0.1, 15 - (time.monotonic() - second_started)))
+            report['secondFallbackSeconds'] = round(time.monotonic() - second_started, 3)
+            require(report['secondFallbackSeconds'] <= 15, 'Healthy fallback took longer than 15 seconds to recover')
+            report['healthyBackupImmediatelyReusable'] = True
+            report['secondFallbackFullscreen'] = second_fallback['viewer']['fullscreen']
         except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as error:
             failure = error
         finally:
@@ -330,7 +355,7 @@ class RuntimeTest:
             safety.write(self.args.output / 'result.json', report)
         if failure:
             raise failure
-        print('PASS: no-Hello trusted probe, untrusted credential rejection, fallback and automatic Ethernet return; ordinary Viewer restored', flush=True)
+        print('PASS: no-Hello trusted probe, untrusted credential rejection, fallback, automatic Ethernet return and immediate healthy-backup reuse; ordinary Viewer restored', flush=True)
 
 
 def main():
@@ -339,7 +364,7 @@ def main():
     parser.add_argument('--address', required=True)
     parser.add_argument('--user', required=True)
     parser.add_argument('--output', type=Path, required=True)
-    parser.add_argument('--build', default='56')
+    parser.add_argument('--build', default='57')
     parser.add_argument('--wired-interface', default='en0')
     parser.add_argument('--fallback-interface', default='en1')
     args = parser.parse_args()

@@ -28,6 +28,7 @@ final class ViewerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
     var routeCandidates:[DirectLinkCandidate] = [], activeCandidate:DirectLinkCandidate?
     var routePolicy = DirectLinkRoutePolicy(), probePolicy = DirectLinkRoutePolicy(), routeProbe:Link?
     var verifiedPreferredKey:String?
+    var intentionalHandoverConnectionID:String?
     var lastProbeResult:[String:Any] = [:]
     func applicationDidFinishLaunching(_ notification: Notification) {
         installMenu(); addMaintenanceMenu()
@@ -113,6 +114,13 @@ final class ViewerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 } else { candidate = routePolicy.select(routeCandidates,now:now) }
                 verifiedPreferredKey = nil
             } else { candidate = nil }
+            if directConnection, LaunchOptions.value("--native-host-address") == nil,
+               candidate == nil, !routeCandidates.isEmpty {
+                // Known routes are cooling down. An unscoped hostname would
+                // bypass that policy and might immediately retry a failed port.
+                showStandby("Reconnecting to your Mac…",detail:"Your display stays paired. Retrying the available connections automatically.",phase:"reconnecting")
+                scheduleReconnect(); return
+            }
             let address:String
             if binding == nil { address = UserDefaults.standard.string(forKey:"viewerAddress") ?? "" }
             else if directConnection {
@@ -210,6 +218,7 @@ final class ViewerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
                             UserDefaults.standard.removeObject(forKey:"nativeHostAddress.v1")
                             self.nativeDiscovery.stop()
                             self.routeProbe?.cancel(); self.routeProbe = nil; self.routeCandidates.removeAll(); self.activeCandidate = nil
+                            self.intentionalHandoverConnectionID = nil
                             peer.send(9,data) { DispatchQueue.main.async {
                                 self.link = nil; peer.cancel(); self.connected = false; self.receivedFrame = false
                                 self.statsTimer?.invalidate(); self.statsTimer = nil; self.activity = nil
@@ -237,8 +246,14 @@ final class ViewerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
             }
             view.onError = { [weak peer] text in peer?.cancel(reason:text) }
             peer.onClose = { [weak self,weak peer] reason in DispatchQueue.main.async {
-                guard let self = self, self.link === peer else { return }
-                if let candidate = candidate { self.routePolicy.failed(candidate.key,now:ProcessInfo.processInfo.systemUptime) }
+                guard let self = self, let peer = peer, self.link === peer else { return }
+                if self.intentionalHandoverConnectionID == peer.traceID {
+                    // Moving to authenticated Ethernet did not make the old
+                    // route unhealthy. Keep it ready if the cable is removed.
+                    self.intentionalHandoverConnectionID = nil
+                } else if let candidate = candidate {
+                    self.routePolicy.failed(candidate.key,now:ProcessInfo.processInfo.systemUptime)
+                }
                 self.routeProbe?.cancel(); self.routeProbe = nil; self.activeCandidate = nil
                 self.link = nil; self.connected = false; self.activity = nil; self.statsTimer?.invalidate(); self.statsTimer = nil
                 self.receivedFrame = false; self.display?.removeFromSuperview(); self.display = nil
@@ -303,10 +318,11 @@ final class ViewerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
             probe.cancel() // No Hello: this probe never claims the Host stream.
             // Keep the old stream until the preferred endpoint has passed TLS.
             // Then use normal reconnect, which resets frame/keyframe state.
+            self.intentionalHandoverConnectionID = current.traceID
             current.cancel(reason:"Using the preferred Ethernet connection…")
         } }
         probe.onClose = { [weak self,weak probe] _ in DispatchQueue.main.async {
-            guard let self = self, self.routeProbe === probe else { return }
+            guard let self = self, let probe = probe, self.routeProbe === probe else { return }
             self.routePolicy.failed(candidate.key,now:ProcessInfo.processInfo.systemUptime)
             self.probePolicy.failed(candidate.key,now:ProcessInfo.processInfo.systemUptime); self.routeProbe = nil
         } }

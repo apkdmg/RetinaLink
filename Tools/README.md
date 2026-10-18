@@ -140,7 +140,7 @@ The runtime harness checks that preservation while both trusted and untrusted pr
 ```sh
 python3 Tools/test_direct_link_runtime.py \
   --socket /absolute/authenticated/control --address IMAC_IP --user IMAC_USER \
-  --output work/direct-link-test/unique-runtime --build 56 \
+  --output work/direct-link-test/unique-runtime --build 57 \
   --wired-interface en0 --fallback-interface en1
 ```
 

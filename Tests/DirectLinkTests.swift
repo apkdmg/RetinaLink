@@ -2,6 +2,30 @@ import Foundation
 import Network
 
 func runDirectLinkTests() throws {
+    // Exercise the dictionary path explicitly: on the real Big Sur receiver,
+    // NWBrowser provides a valid dictionary while subscript/getEntry return nil.
+    let disposableID = UUID().uuidString
+    try check(DirectLinkTXT.identity(["hostID":disposableID,"direct":"1"],key:"hostID") == disposableID,
+        "Bonjour compatibility dictionary lost its Host identity")
+    try check(DirectLinkTXT.identity(["HoStId":disposableID],key:"hostID") == disposableID,
+        "Bonjour TXT identity keys were treated as case-sensitive")
+    for dictionary in [["hostID":""],["hostID":"not-a-uuid"],["hostID":String(repeating:"A",count:65)],
+                       ["hostID":disposableID,"HOSTID":disposableID],["viewerID":disposableID]] {
+        try check(DirectLinkTXT.identity(dictionary,key:"hostID") == nil,"Ambiguous or invalid Bonjour identity was accepted")
+    }
+    let synthetic = NWTXTRecord(["hostID":disposableID,"direct":"1"])
+    try check(DirectLinkTXT.identity(synthetic,key:"hostID") == disposableID,
+        "NWTXTRecord dictionary extraction is incompatible with this OS")
+    let wire = NetService.data(fromTXTRecord:["hostID":Data(disposableID.utf8),"direct":Data("1".utf8)])
+    let decodedWire = NetService.dictionary(fromTXTRecord:wire).reduce(into:[String:String]()) { result,item in
+        result[item.key] = String(data:item.value,encoding:.utf8)
+    }
+    try check(DirectLinkTXT.identity(decodedWire,key:"hostID") == disposableID,"Legacy NetService TXT wire format lost its identity")
+    if #available(macOS 13.0,*) {
+        try check(DirectLinkTXT.identity(NWTXTRecord(wire),key:"hostID") == disposableID,
+            "NWTXTRecord could not parse the published NetService TXT wire format")
+    }
+    print("PASS: Big Sur-compatible Bonjour TXT dictionary identity, case-insensitive keys and malformed/ambiguous rejection")
     typealias State = DirectLinkInterfaceState
     try check(State.classifyIPv4([169,254,30,50]) == .linkLocal,"IPv4 automatic addressing classification")
     try check(State.classifyIPv4([10,28,114,241]) == .configured,"Company IPv4 address treated as automatic")
