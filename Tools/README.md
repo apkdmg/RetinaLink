@@ -2,6 +2,21 @@
 
 Developer ID signing, notarization and pairing-preserving Viewer replacements are described in [RELEASING.md](../RELEASING.md). `release.py doctor`, `credentials`, `prepare` and `advance` use a dedicated Keychain profile without storing secrets in the repository. `python3 -m unittest discover -s Tests -p test_release.py -v` runs offline release-policy tests; those do not count as actual notarization or signed-upgrade validation.
 
+## Native Installer delivery checks
+
+`package_pkg.py` creates a script-free Host PKG from a completed app release, signs it with the same team's Developer ID Installer certificate, then resumes notarization/stapling without changing the accepted apps. Its verifier expands every package and checks the exact payload, version/identifier/relocation policies and native Installer resources. See [RELEASING.md](../RELEASING.md) for the packaging commands.
+
+After the package is complete, run the developer integration check:
+
+```sh
+python3 Tools/test_pkg_delivery.py --directory work/pkg-0.7.0-build59 \
+  --output work/tahoe-installer-audit/final-pkg-delivery.json --open-installer
+```
+
+It applies synthetic `0083`, `0087` and `0187` quarantine flags only to disposable PKG copies and checks Apple's **install** policy. `--open-installer` additionally opens the `0087` copy in Apple's Installer and reads its welcome text and enabled Continue button through accessibility, then quits that test session. It refuses to interfere with an existing Installer session, does not click Install, and never starts the UI capture helper. Run it separately from performance measurements. Use a fresh evidence filename. This is a developer test, not an instruction recipients need to follow.
+
+The test does not install Host, establish actual WhatsApp behavior or validate an untested recipient OS. CLI `installer` success alone is not evidence of the normal GUI flow. Keep installation trials and actual delivery results separate from this synthetic policy check. The shipped consumer PKG never removes quarantine or changes macOS security policy.
+
 These scripts automate the existing, user-authorized Studio/iMac test setup. They do not establish SSH credentials, change sharing/security settings, or create a new tunnel. The iMac must already be unlocked, and the saved encrypted RetinaLink pairing must work.
 
 The workspace contains `work/imac-ssh-session/control`, an authenticated SSH control socket for `opsounimas@10.28.114.22`, and an existing reverse forward from the iMac's `127.0.0.1:58473` to the Studio's port 58473. Change these explicit test-machine defaults when adapting the tools. Do not commit SSH sockets, private keys, saved pairing codes or screen recordings.
@@ -149,3 +164,21 @@ This harness requires an already discoverable fallback interface and the existin
 After each diagnostic probe, the harness requires newer Host and Viewer publications with unchanged process and connection IDs; the stored preferred-return probe has no generation or timestamp, so its freshness is not independently verified even though the new interface-bound TLS stream is verified separately.
 
 The UGREEN CM888 hub is not yet available for testing. Physical direct-cable operation without DHCP and actual unplug/replug recovery remain pending. Existing-company-Ethernet link-local checks cannot establish that traffic bypasses the company switch or demonstrate stable physical 5K 60 fps.
+
+## Direct USB discovery and diagnostics (0.8.0, build 60)
+
+The product detects macOS's existing USB NCM interfaces, discovers the paired Mac on the exact interface and reuses the saved TLS credential. Users connect an Apple silicon Host's rear USB-C port directly to the Intel Viewer's USB-A port using a data cable; the Intel Viewer requires macOS 10.15 or later. This does not require Remote Login, manual IP addresses, an added network service or changes to the company network. SSH is only the independent developer test channel. Keep the UI capture helper off during these tests.
+
+Both executables expose a read-only metadata check, which exits before ordinary app startup. For example, run this through an already authenticated SSH session on the iMac:
+
+```sh
+/usr/bin/ssh -S /absolute/authenticated/control \
+  -o BatchMode=yes -o ConnectTimeout=5 -l IMAC_USER IMAC_IP \
+  '"/Users/IMAC_USER/Applications/RetinaLink Viewer.app/Contents/MacOS/RetinaLink" --usb-link-status'
+```
+
+The equivalent Host executable accepts the same flag. Replace the installed path and test-account placeholders; the command does not establish SSH credentials. JSON reports `readOnly: true`, `networkSettingsChanged: false`, `pairingAccessed: false` and `peerAuthenticated: false`. Per-interface observations include the source of the USB topology evidence, link activity where available, interface-up state and automatic/local address state. An interface can exist while its cable is unplugged. A positive observation is not a successful RetinaLink connection or a trusted peer; check the normal authenticated stream diagnostics separately.
+
+`nominalLinkSpeed`, when present, is the network driver's advertised value. Apple's virtual NCM interface can report 100 Mbps even when that is not the physical USB bus speed. Use independent USB bus metadata to distinguish High Speed from SuperSpeed, and measure traffic separately from both. The cable that established a working link in the current Studio/iMac setup negotiated **USB 2.0 High Speed (480 Mbps)**. Do not describe that result as SuperSpeed, measured 480 Mbps application throughput or stable 5K60.
+
+The USB policy tests cover public Apple NCM detection, rejection of ordinary USB Ethernet adapters/iPhone/private management interfaces, USB preference, interface constraints, saved TLS preservation and retry behavior. These fixtures do not establish physical unplug/replug, wake recovery or presentation performance. Keep actual hardware results and their OS, cable, build and account scope in [VALIDATION.md](../VALIDATION.md). SuperSpeed USB operation and stable physical 5K60 over USB remain unvalidated.

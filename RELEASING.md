@@ -1,8 +1,29 @@
 # Developer ID releases
 
-The latest release candidate is **0.6.2 build 55**, with one-time Viewer installation, local approval on both displays, interrupted-setup recovery and direct authenticated TLS. Real two-Mac approval/cancellation/resume tests, installed Host 54→55 and Viewer 53→55 signed updates, idle Host agent restart and Viewer relaunch pass with unchanged pairing and FileVault. Idle Host restart recovered without Viewer intervention in 27.68 seconds in this trial. Both apps and both separate Host/Viewer DMGs are Developer ID signed, Apple-accepted and stapled. The protected dedicated account has compatible native Viewer 0.6.0 build 53, updated with owner authentication; physical reboot/first-login/wake checks remain deferred. See [NATIVE_CONNECTION.md](NATIVE_CONNECTION.md) and [VALIDATION.md](VALIDATION.md).
+The current release is **0.8.0 build 60**, adding automatic direct USB selection and reconnection to the existing Ethernet transport, native two-screen approval and saved encrypted pairing. Host, the universal Viewer and the native Host PKG are Developer ID signed, Apple-accepted and stapled. The USB cable that established a working link on the test Studio/iMac pair negotiated USB 2.0 High Speed (480 Mbps); SuperSpeed and stable 5K60 over USB remain unvalidated. Dedicated-account automatic login, real reboot and sleep/wake recovery passed during earlier testing on the same iMac. See [DIRECT_ETHERNET.md](DIRECT_ETHERNET.md), [NATIVE_CONNECTION.md](NATIVE_CONNECTION.md) and [VALIDATION.md](VALIDATION.md) for exact test boundaries.
+
+## Build the native Host installer
+
+Use the completed, accepted release without rebuilding or re-signing either app. The Keychain must contain a **Developer ID Installer** identity from the same team as Host; an Application certificate cannot sign a PKG.
+
+```sh
+python3 Tools/package_pkg.py prepare \
+  --release work/release-0.8.0-build60 --directory work/pkg-0.8.0-build60
+python3 Tools/package_pkg.py advance \
+  --directory work/pkg-0.8.0-build60 --output outputs/RetinaLink-Host-0.8.0.pkg
+```
+
+Repeat `advance` after exit code 3 while Apple processes the saved submission. Once accepted, the tool staples the ticket, checks Gatekeeper's **install** policy, expands the package and verifies every app path, file, mode and internal symlink against the accepted release. It also verifies the bundled Viewer archive and app ticket. `verify` rechecks the immutable final digest before exporting. A SHA-256 sidecar accompanies the output. No app is installed, launched or published by these commands.
+
+The accepted USB release comes from `work/release-0.8.0-build60`. Its finished, stapled Host package is `outputs/RetinaLink-Host-0.8.0.pkg`; Apple accepted package submission `2c3e3d9e-c5ab-4149-8da6-57f75ed986bd`. The package retains the accepted apps and their existing signing identities, bundle identifiers and pairing namespace. The native Installer's document-sharing policy checks and actual delivery/recipient-OS tests remain distinct from notarization acceptance.
+
+The native Installer has welcome, preparation and completion screens. Its only payload is `/Applications/RetinaLink Host.app`; its component uses strict bundle identifiers, version checking and atomic upgrade, with relocation disabled. No preinstall/postinstall scripts, remote packages, automatic app launch, privacy resets or quarantine-removal commands are included. It does not find or replace an existing copy in `~/Applications`; existing users must retain their permanent installation path. Preferences and pairing remain outside the payload.
+
+Use this PKG for WhatsApp sharing instead of the drag-copy Host DMG. Signing and notarization alone do not establish downloader compatibility: the distribution test must apply the reproduced sandbox quarantine flag to a disposable copy, confirm Gatekeeper's install decision and open that copy in native Installer. Keep a separate boundary for actual WhatsApp delivery and the recipient OS. A ZIP of the app preserves the blocking flag and is not a workaround. [Apple DTS describes this quarantine failure](https://developer.apple.com/forums/thread/767612), and [Apple's packaging guidance](https://developer.apple.com/documentation/xcode/packaging-mac-software-for-distribution) describes the normal Developer ID Installer workflow. Test evidence is recorded in [VALIDATION.md](VALIDATION.md).
 
 ## Build the consumer DMG
+
+The standalone Viewer 0.8.0 build 60 DMG is exported to `outputs/RetinaLink-Viewer-0.8.0.dmg`. Apple accepted submission `2390d76a-48f3-4dcb-a1b6-9ab63e470975`; its outer ticket and the unchanged Viewer ticket are stapled and Gatekeeper-accepted. Mounted contents, Finder layout, Applications shortcut and a disposable drag-copy equivalent passed verification. No installed app or pairing was changed by packaging.
 
 After `release.py advance` has completed both app tickets and embedded the stapled Viewer, package those exact binaries:
 
@@ -14,9 +35,9 @@ work/dmg-tools/bin/python Tools/package_dmg.py prepare \
 work/dmg-tools/bin/python Tools/package_dmg.py advance \
   --directory work/dmg-0.6.2-build55 --output outputs/RetinaLink-0.6.2.dmg
 work/dmg-tools/bin/python Tools/package_dmg.py prepare --role Viewer \
-  --release work/release-0.6.2-build55 --directory work/dmg-0.6.2-build55-viewer
+  --release work/release-0.8.0-build60 --directory work/dmg-0.8.0-build60-viewer
 work/dmg-tools/bin/python Tools/package_dmg.py advance \
-  --directory work/dmg-0.6.2-build55-viewer --output outputs/RetinaLink-Viewer-0.6.2.dmg
+  --directory work/dmg-0.8.0-build60-viewer --output outputs/RetinaLink-Viewer-0.8.0.dmg
 ```
 
 `advance` submits once, then returns exit code 3 while Apple processes the DMG. Repeat that command later to check the saved submission; it never rebuilds a submitted image. Upon acceptance it staples and validates the DMG ticket, checks Gatekeeper, verifies the mounted Host and embedded Viewer, checks Finder layout and the Applications symlink, and verifies a disposable copy of Host. The source app signatures, identifiers, pairing namespace and embedded Viewer archive are unchanged. Nothing is installed or launched. Each image includes the offline no-SSH Setup Guide and the unchanged FileVault/restart limitations. The standard flow uses a one-time local Viewer installation; advanced dedicated-account administration remains separate.
@@ -58,7 +79,9 @@ The existing ad-hoc installation requires a **one-time transition**: complete Ho
 
 ## Validation status
 
-Current Ethernet release: **0.7.0 build 59**, runtime commit `643b2d0`. Both installed active apps passed signed 58→59 update and SSH recovery testing with unchanged pairing, FileVault and company configuration. Host, universal Viewer, bundled Viewer archive and separate Host/Viewer DMGs are Apple-accepted, stapled and Gatekeeper-verified. Final artifacts and hashes are in `outputs/RetinaLink-0.7.0-Release.json`. The dirty-tree flag reflects an unrelated pre-existing untracked review file; runtime source and release resources match the recorded commit. Physical direct-cable and dedicated-account restart/wake tests remain pending; see [VALIDATION.md](VALIDATION.md). The following paragraphs retain historical release evidence.
+Current USB release: **0.8.0 build 60**, accepted app release `work/release-0.8.0-build60` and stapled Host package `outputs/RetinaLink-Host-0.8.0.pkg`. The package acceptance ID is recorded above. USB topology detection is read-only and route changes retain the saved TLS pairing. See [VALIDATION.md](VALIDATION.md) for live USB results and preservation checks; the following paragraphs retain historical release evidence.
+
+Previous Ethernet release: **0.7.0 build 59**, runtime commit `643b2d0`. Both installed active apps passed signed 58→59 update and SSH recovery testing with unchanged pairing, FileVault and company configuration. Host, universal Viewer, bundled Viewer archive and separate Host/Viewer DMGs are Apple-accepted, stapled and Gatekeeper-verified. Final artifacts and hashes are in `outputs/RetinaLink-0.7.0-Release.json`. The dirty-tree flag reflects an unrelated pre-existing untracked review file; runtime source and release resources match the recorded commit. Dedicated-account restart/wake testing subsequently passed; physical direct-Ethernet-cable testing was still pending for that release. See [VALIDATION.md](VALIDATION.md).
 
 Actual Developer ID build-44/build-45 Host and AMD iMac Viewer self-tests, simulated capture-denial recovery and fifteen offline release-policy tests pass. A native Launch Services probe verifies two different signed binaries with the real Host designated requirement can share a temporary test item silently, while an ad-hoc clone is denied when the classic-Keychain interaction guard is applied. All temporary items were removed; production credentials were never accessed by that probe. The iMac correctly rejects the ad-hoc test app against the Developer ID requirement. The tests cover wrong-team/Host/namespace rejection, changed upload detection, resume without duplicate submission, rejection/Gatekeeper failure and Viewer-ticket-before-Host-signing order. Apple acceptance is separately recorded in the release states; these self-tests are not evidence of a signed-to-signed installation update.
 

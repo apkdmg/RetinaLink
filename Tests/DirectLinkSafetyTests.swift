@@ -6,6 +6,14 @@ import Darwin
 // interface settings, load production credentials, or claim that discovery is
 // authentication. Viewer handover authentication is exercised separately.
 func runDirectLinkSafetyTests() throws {
+    try check(DirectLinkRoutePolicy.usbRouteUnavailable(recordedIndex:7,currentIndex:7,linkActive:false),
+        "A confirmed USB disconnect kept a stale stream active")
+    try check(DirectLinkRoutePolicy.usbRouteUnavailable(recordedIndex:7,currentIndex:0,linkActive:nil) &&
+        DirectLinkRoutePolicy.usbRouteUnavailable(recordedIndex:7,currentIndex:9,linkActive:true),
+        "A removed or renumbered USB interface retained its old path")
+    try check(!DirectLinkRoutePolicy.usbRouteUnavailable(recordedIndex:7,currentIndex:7,linkActive:nil) &&
+        !DirectLinkRoutePolicy.usbRouteUnavailable(recordedIndex:7,currentIndex:7,linkActive:true),
+        "Unknown or healthy USB hardware status was treated as a disconnect")
     let localScope = NWEndpoint.Host("fe80::1%lo0")
     guard case .ipv6(let address) = localScope, let interface = address.interface else {
         throw LinkError.invalid("Network.framework lost the IPv6 link-local interface scope")
@@ -48,6 +56,24 @@ func runDirectLinkSafetyTests() throws {
         "Transport observations claimed physical topology or system reconfiguration")
     print("PASS: typed IPv6/Bonjour interface scope, legacy SSH validation boundary and TLS-preserving path constraints")
 
+    // NWInterface has no public initializer for a synthetic .other interface.
+    // Test its USB policy separately, then exercise the same scoped connection
+    // boundary with the real loopback interface and a synthetic local USB
+    // observation. This fixture is not a physical USB connection.
+    var usbObservation = observation
+    usbObservation.usb = USBLinkObservation(source:.deviceNCM)
+    let usbRank = DirectLinkPreference.rank(type:.other,state:usbObservation)
+    try check(usbRank < DirectLinkPreference.rank(type:.wiredEthernet,state:observation),
+        "A locally identified USB interface reported as .other cannot precede automatic Ethernet")
+    let usbScopeCandidate = DirectLinkCandidate(id:UUID().uuidString,name:"Disposable USB scope test",endpoint:service,
+        interface:interface,state:usbObservation,key:"disposable-usb-scope-test")
+    try check(!usbScopeCandidate.isUSB,"A USB observation relabeled the actual loopback interface")
+    let usbParameters = try networkParameters(String(repeating:"B",count:32))
+    usbScopeCandidate.apply(to:usbParameters)
+    try check(usbParameters.requiredInterface?.index == interface.index && !usbParameters.includePeerToPeer &&
+        usbParameters.defaultProtocolStack.applicationProtocols.contains {$0 is NWProtocolTLS.Options},
+        "The USB route selection path lost its concrete scope or TLS authentication")
+
     var policy = DirectLinkRoutePolicy()
     try check(!policy.mayProbe(key:"existing",rank:0,wired:true,activeKey:"existing",activeRank:10,now:0),
         "Discovery proposed replacing the active route with itself")
@@ -57,6 +83,8 @@ func runDirectLinkSafetyTests() throws {
         "A wireless discovery result can trigger the Ethernet handover policy")
     try check(policy.mayProbe(key:"better",rank:0,wired:true,activeKey:"existing",activeRank:10,now:0),
         "A better Ethernet route cannot be tested while a working route remains active")
+    try check(policy.mayProbe(key:"usb-other",rank:usbRank,wired:true,activeKey:"company-lan",activeRank:10,now:0),
+        "A locally identified USB route cannot be authenticated before replacing company Ethernet")
     // A discovered UUID is untrusted. Even failed authentication must consume
     // the attempt interval, so many differently named advertisements cannot
     // repeatedly provoke TLS probes or interrupt normal display work.
@@ -114,6 +142,18 @@ func runDirectLinkSafetyTests() throws {
         _ = recovery.selectKey(from:[(key:"rotating-\(index)",rank:0)],now:Double(index)+100)
     }
     try check(recovery.lastAttempt.count <= 64,"Discovery churn created unbounded route attempt history")
+    // A USB interface can get a new index when it is plugged in again. Its old
+    // failed endpoint must not suppress the new scoped endpoint or the healthy
+    // company-network fallback, and no index is written into the pairing.
+    var cableRecovery = DirectLinkRoutePolicy()
+    let originalUSB = "trusted-host|usb-index-9", returnedUSB = "trusted-host|usb-index-12"
+    try check(cableRecovery.selectKey(from:[(key:originalUSB,rank:0),(key:"company-lan",rank:10)],now:0) == originalUSB,
+        "A newly available USB route was not selected before company Ethernet")
+    cableRecovery.failed(originalUSB,now:1)
+    try check(cableRecovery.selectKey(from:[(key:originalUSB,rank:0),(key:"company-lan",rank:10)],now:2) == "company-lan",
+        "A lost USB route prevented company-network fallback")
+    try check(cableRecovery.selectKey(from:[(key:returnedUSB,rank:0),(key:"company-lan",rank:10)],now:3) == returnedUSB,
+        "The old USB interface cooldown prevented reconnection on its new index")
     let info = DirectLinkPath.endpointInfo(.hostPort(host:localScope,port:58473))
     try check(info.family == "IPv6" && info.linkLocal && info.interface?.index == interface.index,
         "Verified path metadata lost IPv6 link-local scope")
@@ -131,5 +171,26 @@ func runDirectLinkSafetyTests() throws {
         DirectLinkPath.uniqueInterfaceIndex([]) == nil &&
         DirectLinkPath.uniqueInterfaceIndex([0,-1]) == nil,
         "Unambiguous or absent interface observations were misreported")
+    let unknownTransport = DirectLinkPath.transportMetadata(state:nil,interfaceObserved:false,
+        usesEthernet:false,usesWiFi:false)
+    try check(unknownTransport["transportKind"] as? String == "other" &&
+        unknownTransport["connection"] as? String == "Local network" && unknownTransport["usbEvidence"] == nil,
+        "An unknown path was presented as a USB connection")
+    let companyTransport = DirectLinkPath.transportMetadata(state:observation,interfaceObserved:true,interfaceType:.wiredEthernet,
+        usesEthernet:true,usesWiFi:false)
+    try check(companyTransport["transportKind"] as? String == "ethernet" &&
+        companyTransport["wired"] as? Bool == true && companyTransport["usbEvidence"] == nil,
+        "Ordinary Ethernet was presented as a direct USB connection")
+    let usbTransport = DirectLinkPath.transportMetadata(state:usbObservation,interfaceObserved:true,interfaceType:.other,
+        usesEthernet:false,usesWiFi:false)
+    try check(usbTransport["transportKind"] as? String == "usb" && usbTransport["connection"] as? String == "USB" &&
+        usbTransport["wired"] as? Bool == true && usbTransport["usbEvidence"] as? String == USBLinkSource.deviceNCM.rawValue,
+        "An observed USB .other interface lost its transport label or local evidence")
+    for (observed,type):(Bool,NWInterface.InterfaceType?) in [(false,.other),(true,nil),(true,.wifi),(true,.loopback),(true,.cellular)] {
+        let unverified = DirectLinkPath.transportMetadata(state:usbObservation,interfaceObserved:observed,interfaceType:type,
+            usesEthernet:false,usesWiFi:type == .wifi)
+        try check(unverified["transportKind"] as? String != "usb" && unverified["usbEvidence"] == nil,
+            "An unverified or contradictory interface observation invented a USB path")
+    }
     print("PASS: bounded probe backoff, fair fallback under repeated preferred-route failures, equal-time retries and scoped path reporting")
 }

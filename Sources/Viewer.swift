@@ -118,7 +118,7 @@ final class ViewerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
                         // Host briefly republishes Bonjour when the old stream
                         // closes. Retain the authenticated choice until its
                         // fresh scoped record returns, with a bounded fallback.
-                        showStandby("Reconnecting over Ethernet…",detail:"Your display stays paired. Waiting for the preferred connection to return.",phase:"reconnecting")
+                        showStandby("Reconnecting over your cable…",detail:"Your display stays paired. Waiting for the preferred connection to return.",phase:"reconnecting")
                         scheduleReconnect(); return
                     } else {
                         verifiedPreferredKey = nil; verifiedPreferredUntil = 0
@@ -166,7 +166,7 @@ final class ViewerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
                     guard let self = self, self.link === peer else { return }
                     if let candidate = candidate, !DirectLinkPath.requiredInterfaceVerified(connection:peer.connection,candidate:candidate) {
                         self.routePolicy.failed(candidate.key,now:ProcessInfo.processInfo.systemUptime)
-                        peer.cancel(reason:"The selected Ethernet route changed. Trying another connection…"); return
+                        peer.cancel(reason:"The selected \(candidate.label) route changed. Trying another connection…"); return
                     }
                     let hello = Hello(version:1,bc7:true,name:Host.current().localizedName ?? "iMac",maxFramesInFlight:3,chunkedPacking:true,appVersion:LaunchOptions.version,appBuild:LaunchOptions.build,automaticUpdates:true,directConnection:self.directConnection)
                     if let data = try? JSONEncoder().encode(hello) { peer.send(1,data) }
@@ -261,7 +261,7 @@ final class ViewerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
             peer.onClose = { [weak self,weak peer] reason in DispatchQueue.main.async {
                 guard let self = self, let peer = peer, self.link === peer else { return }
                 if self.intentionalHandoverConnectionID == peer.traceID {
-                    // Moving to authenticated Ethernet did not make the old
+                    // Moving to an authenticated cable did not make the old
                     // route unhealthy. Keep it ready if the cable is removed.
                     self.intentionalHandoverConnectionID = nil
                 } else if let candidate = candidate {
@@ -301,6 +301,16 @@ final class ViewerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
         nativeDiscovery.onCandidates = { [weak self] candidates in
             guard let self = self else { return }; self.routeCandidates = candidates
+            if let active = self.activeCandidate, active.isUSB, self.connected,
+               DirectLinkRoutePolicy.usbRouteUnavailable(recordedIndex:active.interfaceIndex,
+                   currentIndex:Int(if_nametoindex(active.interfaceName)),
+                   linkActive:USBLinkInterfaces.snapshot()[active.interfaceName]?.linkActive) {
+                // Do not wait for a stalled TCP stream when macOS has already
+                // reported the actual USB port down. Normal TLS reconnection
+                // selects an available fallback and retains the saved pairing.
+                self.link?.cancel(reason:"USB disconnected. Reconnecting automatically…")
+                return
+            }
             if self.link == nil {
                 if self.reconnect == nil { self.connect() }
             } else { self.considerPreferredConnection() }
@@ -336,7 +346,7 @@ final class ViewerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
             // Keep the old stream until the preferred endpoint has passed TLS.
             // Then use normal reconnect, which resets frame/keyframe state.
             self.intentionalHandoverConnectionID = current.traceID
-            current.cancel(reason:"Using the preferred Ethernet connection…")
+            current.cancel(reason:"Using the preferred \(candidate.label) connection…")
         } }
         probe.onClose = { [weak self,weak probe] _ in DispatchQueue.main.async {
             guard let self = self, let probe = probe, self.routeProbe === probe else { return }

@@ -20,6 +20,7 @@ func pump(until condition: () -> Bool, timeout: Double = 10) throws {
 func runSelfTests() throws {
     try runSetupTests()
     try runNativeTests()
+    try runUSBLinkTests()
     try runDirectLinkTests()
     try runDirectLinkSafetyTests()
     try testReceiveCredits()

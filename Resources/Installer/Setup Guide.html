@@ -26,7 +26,7 @@
   <span class="pill">One-time installation</span>
   <h2>Two Macs. One quick introduction.</h2>
   <ol>
-   <li>On your main Mac, open the <strong>Host DMG</strong>, drag <strong>RetinaLink Host</strong> onto <strong>Applications</strong>, then open Host from Applications.</li>
+   <li>On your main Mac, open the <strong>Host PKG</strong> and follow Apple’s Installer, then open Host from Applications. If you have the Host DMG instead, drag <strong>RetinaLink Host</strong> onto <strong>Applications</strong> before opening it.</li>
    <li>On your iMac, open the <strong>Viewer DMG</strong>, drag <strong>RetinaLink Viewer</strong> onto <strong>Applications</strong>, then open Viewer. You can also use <strong>Save Viewer Installer…</strong> in Host and copy that signed ZIP to your iMac.</li>
    <li>Choose <strong>Add Display</strong> in Host and select your iMac. If it is not listed, enter the iMac’s local hostname or IP address. Both Macs must be on a network that allows them to communicate.</li>
    <li><strong>Compare the eight-digit verification number on both Macs.</strong> Choose <strong>Numbers Match — Pair</strong> on Host and <strong>Allow This Mac</strong> on the iMac only if both numbers match and you started setup. Cancel if they differ.</li>
@@ -41,6 +41,14 @@
   <p>Normal installation, approval, streaming and reconnection use an encrypted app connection. <strong>You do not need to enable Remote Login, Remote Management or Screen Sharing.</strong> RetinaLink does not ask for an iMac account password during this standard flow.</p>
   <p>Device trust is saved in each Mac’s login Keychain. Only the approved Host can use the display. A network advertisement alone cannot approve a Host or replace an existing pairing.</p>
   <p>Viewer is discoverable for new setup for ten minutes after opening while unpaired. Choose <strong>Display → Make Discoverable for Setup</strong> on the iMac to start another setup window. Once paired, Viewer no longer accepts new pairing requests.</p>
+ </section>
+ <section>
+  <span class="pill">Automatic USB</span>
+  <h2>Connect your iMac directly.</h2>
+  <p>With matching Host and Viewer @VERSION@ installed, connect a data-capable USB-C-to-USB-A cable directly from a <strong>rear USB-C port on the Apple silicon Mac Studio</strong> to a USB-A port on the Intel iMac. Leave both Macs’ existing company-network connections in place and keep Host and Viewer open. Do not use a USB hub, charging-only cable or USB-A-to-USB-A cable.</p>
+  <p>When macOS makes the USB connection available, RetinaLink finds your trusted Mac and selects <strong>USB</strong> automatically. You do not enter IP addresses, enable Remote Login or pair again. If USB disconnects, Viewer tries available network connections and stays fullscreen; when USB returns, it verifies the saved pairing before switching back. A switch can briefly interrupt the picture.</p>
+  <p><strong>Pairing, FileVault and company network settings stay unchanged.</strong> RetinaLink uses the automatic local addresses supplied by macOS. It does not enable Internet Sharing or change network services, DNS, gateways or service order. Existing Local Network permission and company policies still apply.</p>
+  <p class="note">The working cable tested with this Studio and Late-2014 iMac negotiated USB 2 high-speed (480 Mbps). USB 3 SuperSpeed operation and stable native 5K at 60 fps remain unvalidated. A cable’s advertised speed does not establish its actual negotiated speed or display performance.</p>
  </section>
  <section>
   <span class="pill">Automatic Ethernet</span>
@@ -62,7 +70,7 @@
   <p>Viewer opens fullscreen after sign-in, reconnects to your trusted Mac and shows a quiet waiting screen when Host is unavailable. There is no daily code or Connect button on the iMac.</p>
   <p><strong>FileVault is never changed.</strong> On an Intel iMac with FileVault enabled, someone must unlock the startup disk locally after a restart before Viewer can run. This app cannot bypass that protection.</p>
   <p>The optional <strong>Dedicated Display Setup</strong> for retired Catalina/Big Sur iMacs is an advanced account-management operation. Its existing Host administrator workflow still uses SSH and explicit administrator authorization. It is separate from normal pairing and streaming. Existing dedicated accounts remain unchanged by this update; normal setup does not create accounts, enable automatic login or alter locking.</p>
-  <p class="note">Dedicated physical restart, first automatic sign-in and password-free wake validation remain pending. Native 5K at 60 updates/s remains a target; stable physical 60 fps across all workloads has not been established.</p>
+  <p class="note">Automatic-login reboot, fullscreen startup, reconnection and sleep/wake recovery have been tested on the dedicated Big Sur iMac. Other Macs and company policies can differ. Native 5K at 60 updates/s remains a target; stable physical 60 fps across all workloads has not been established.</p>
  </section>
  <footer>RetinaLink @VERSION@ · build @BUILD@ · Developer ID signed and Apple-notarized apps. macOS controls first-run permission prompts.</footer>
 </main>

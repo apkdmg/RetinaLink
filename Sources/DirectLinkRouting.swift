@@ -4,6 +4,11 @@ import Network
 // Pure connection policy: discovery can suggest a route, but only a successful
 // TLS probe may trigger replacement of a working stream. All times are uptime.
 struct DirectLinkRoutePolicy {
+    static func usbRouteUnavailable(recordedIndex:Int,currentIndex:Int,linkActive:Bool?)->Bool {
+        // Only call for a positively identified, active USB route. A missing
+        // Bonjour announcement or unknown hardware status is not link loss.
+        currentIndex == 0 || currentIndex != recordedIndex || linkActive == false
+    }
     struct Attempt { let time:Double; let order:UInt64 }
     private(set) var retryAfter:[String:Double] = [:]
     private(set) var lastAttempt:[String:Attempt] = [:]
@@ -55,7 +60,7 @@ struct DirectLinkRoutePolicy {
 
 enum DirectLinkPath {
     // An available path interface is a useful fallback only when unambiguous.
-    // Its ordering alone does not prove which Ethernet port carries traffic.
+    // Its ordering alone does not prove which cable carries traffic.
     static func uniqueInterfaceIndex(_ indexes:[Int])->Int? {
         let unique = Set(indexes.filter {$0 > 0})
         return unique.count == 1 ? unique.first : nil
@@ -76,6 +81,21 @@ enum DirectLinkPath {
         @unknown default: return ("unknown",false,nil)
         }
     }
+    // USB is a local interface observation, never a Bonjour advertisement or
+    // an assumption based on .other. Only an interface identified on this path
+    // may contribute USB evidence to the displayed connection label.
+    static func transportMetadata(state:DirectLinkInterfaceState?,interfaceObserved:Bool,
+                                  interfaceType:NWInterface.InterfaceType? = nil,
+                                  usesEthernet:Bool,usesWiFi:Bool)->[String:Any] {
+        let usbType = interfaceType == .wiredEthernet || interfaceType == .other
+        let usb = interfaceObserved && usbType && state?.isUSB == true
+        let automatic = interfaceObserved && state?.automaticAddressing == true
+        let kind = usb ? "usb" : (usesEthernet ? "ethernet" : (usesWiFi ? "wifi" : "other"))
+        let label = usb ? "USB" : (usesEthernet ? (automatic ? "Ethernet · automatic addressing" : "Ethernet") : (usesWiFi ? "Wi-Fi" : "Local network"))
+        var result:[String:Any] = ["connection":label,"transportKind":kind,"wired":usb || usesEthernet,"automaticAddressing":automatic]
+        if usb, let source = state?.usb?.source.rawValue { result["usbEvidence"] = source }
+        return result
+    }
     static func metadata(connection:NWConnection,candidate:DirectLinkCandidate? = nil)->[String:Any] {
         guard let path = connection.currentPath else { return ["connection":"Connecting","authenticated":false,"networkSettingsChanged":false] }
         let local = endpointInfo(path.localEndpoint), remote = endpointInfo(path.remoteEndpoint)
@@ -84,13 +104,14 @@ enum DirectLinkPath {
         let uniqueIndex = uniqueInterfaceIndex(matching.map(\.index))
         let unambiguous = matching.first { $0.index == uniqueIndex }
         let interface = bound ? candidate?.interface : (local.interface ?? remote.interface ?? unambiguous)
-        let wired = path.usesInterfaceType(.wiredEthernet)
-        let automatic = interface.flatMap { DirectLinkInterfaceState.snapshot()[$0.name] }?.automaticAddressing ?? false
-        let label = wired ? (automatic ? "Ethernet · automatic addressing" : "Ethernet") : (path.usesInterfaceType(.wifi) ? "Wi-Fi" : "Local network")
-        return ["connection":label,"interface":interface?.name ?? "unknown","interfaceIndex":interface?.index ?? 0,
-                "wired":wired,"automaticAddressing":automatic,"scopedDiscovery":candidate != nil,
+        let state = interface.flatMap { DirectLinkInterfaceState.snapshot()[$0.name] }
+        var result = transportMetadata(state:state,interfaceObserved:interface != nil,interfaceType:interface?.type,
+            usesEthernet:path.usesInterfaceType(.wiredEthernet),usesWiFi:path.usesInterfaceType(.wifi))
+        result.merge(["interface":interface?.name ?? "unknown","interfaceIndex":interface?.index ?? 0,
+                "scopedDiscovery":candidate != nil,
                 "requiredInterfaceVerified":bound,"addressFamily":remote.family,
                 "localLinkLocal":local.linkLocal,"remoteLinkLocal":remote.linkLocal,
-                "authenticated":connection.state == .ready && connection.parameters.defaultProtocolStack.applicationProtocols.contains(where:{$0 is NWProtocolTLS.Options}),"networkSettingsChanged":false]
+                "authenticated":connection.state == .ready && connection.parameters.defaultProtocolStack.applicationProtocols.contains(where:{$0 is NWProtocolTLS.Options}),"networkSettingsChanged":false]) { _,new in new }
+        return result
     }
 }

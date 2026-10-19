@@ -2,6 +2,26 @@ import AppKit
 
 if ProcessInfo.processInfo.environment["RETINALINK_SSH_ASKPASS"] == "1" { runSSHAskpass() }
 
+if LaunchOptions.has("--usb-link-status") {
+    // Read-only SSH diagnostic. Hardware presence alone never means that a
+    // cable is connected, or that the peer is the trusted RetinaLink Mac.
+    let observations = USBLinkInterfaces.snapshot(), states = DirectLinkInterfaceState.snapshot()
+    let interfaces:[[String:Any]] = observations.keys.sorted().map { name in
+        let observation = observations[name]!, state = states[name]
+        var value:[String:Any] = ["interface":name,"usbEvidence":observation.source.rawValue,
+            "interfaceUp":state?.isUp == true,"hasLinkLocalAddress":state?.hasLinkLocal == true,
+            "automaticAddressing":state?.automaticAddressing == true]
+        if let active = observation.linkActive { value["linkActive"] = active }
+        if let speed = observation.nominalLinkSpeed { value["nominalLinkSpeed"] = speed }
+        return value
+    }
+    let report:[String:Any] = ["schema":1,"version":LaunchOptions.version,"build":LaunchOptions.build,
+        "interfaces":interfaces,"networkSettingsChanged":false,"pairingAccessed":false,
+        "peerAuthenticated":false,"readOnly":true]
+    do { FileHandle.standardOutput.write(try JSONSerialization.data(withJSONObject:report,options:[.sortedKeys,.prettyPrinted])); print(""); exit(0) }
+    catch { fputs("USB interface observations could not be encoded.\n",stderr); exit(1) }
+}
+
 if LaunchOptions.has("--native-test-harness") {
     guard DeviceSettings.nativeTestScope != nil else { exit(2) }
     let app = NSApplication.shared; app.setActivationPolicy(.regular)

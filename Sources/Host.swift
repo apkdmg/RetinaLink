@@ -361,7 +361,7 @@ final class HostApp: NSObject, NSApplicationDelegate {
         let add = Design.button("Add Display",target:self,action:#selector(addDisplay),primary:true)
         let spacer = NSView(); spacer.setContentHuggingPriority(.defaultLow,for:.horizontal)
         let heading = horizontal([Design.vertical([Design.text("Your displays",30,.bold),Design.text("Set up once. Connect effortlessly.",14,secondary:true)],spacing:7),spacer,add])
-        let automatic = Design.card([Design.message("Always ready, after sign-in",detail:"Viewer opens fullscreen and reconnects automatically. Plug in an Ethernet cable and RetinaLink prefers it using automatic addressing. Company network settings stay unchanged.",symbol:"arrow.triangle.2.circlepath"),restartNote,
+        let automatic = Design.card([Design.message("Always ready, after sign-in",detail:"Connect your Macs with a compatible USB data cable or Ethernet. Viewer finds the connection and reconnects automatically. Your display stays paired and company network settings stay unchanged.",symbol:"arrow.triangle.2.circlepath"),restartNote,
             horizontal([Design.button("Display Setup…",target:self,action:#selector(addDisplay)),Design.button("Dedicated Display Guide…",target:self,action:#selector(dedicatedGuide))])])
         updateButton = Design.button("Update Display Software…",target:self,action:#selector(updateViewerSoftware))
         let details = Design.card([Design.text("Connection details",17,.semibold),Design.text("Native 5K at a target of 60 updates/s. Actual performance depends on capture and network conditions.",12,secondary:true),status,profiles,stats,updateButton!,

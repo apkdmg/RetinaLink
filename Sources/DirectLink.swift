@@ -10,8 +10,10 @@ struct DirectLinkInterfaceState:Equatable {
     var hasIPv6LinkLocal = false
     var hasConfiguredAddress = false
     var isUp = false
+    var usb:USBLinkObservation? = nil
 
     var automaticAddressing:Bool { hasLinkLocal && !hasConfiguredAddress }
+    var isUSB:Bool { usb != nil }
 
     enum AddressClass:Equatable { case ignored,linkLocal,configured }
     static func classifyIPv4(_ bytes:[UInt8])->AddressClass {
@@ -25,6 +27,7 @@ struct DirectLinkInterfaceState:Equatable {
     }
 
     static func snapshot()->[String:DirectLinkInterfaceState] {
+        let usbInterfaces = USBLinkInterfaces.snapshot()
         var first:UnsafeMutablePointer<ifaddrs>?
         guard getifaddrs(&first) == 0, let start = first else { return [:] }
         defer { freeifaddrs(start) }
@@ -34,6 +37,7 @@ struct DirectLinkInterfaceState:Equatable {
             guard let name = item.ifa_name, let address = item.ifa_addr else { continue }
             let interfaceName = String(cString:name)
             var state = states[interfaceName] ?? DirectLinkInterfaceState()
+            state.usb = usbInterfaces[interfaceName]
             state.isUp = item.ifa_flags & UInt32(IFF_UP) != 0 && item.ifa_flags & UInt32(IFF_LOOPBACK) == 0
             let kind:AddressClass
             switch Int32(address.pointee.sa_family) {
@@ -58,8 +62,9 @@ struct DirectLinkInterfaceState:Equatable {
 
 enum DirectLinkPreference {
     static func rank(type:NWInterface.InterfaceType,state:DirectLinkInterfaceState)->Int {
+        if state.isUSB && (type == .wiredEthernet || type == .other) { return 0 }
         switch type {
-        case .wiredEthernet: return state.automaticAddressing ? 0 : 10
+        case .wiredEthernet: return state.automaticAddressing ? 1 : 10
         case .wifi: return 20
         case .other: return 30
         case .cellular: return 40
@@ -98,14 +103,24 @@ struct DirectLinkCandidate {
     var rank:Int { DirectLinkPreference.rank(type:interface.type,state:state) }
     var interfaceName:String { interface.name }
     var interfaceIndex:Int { interface.index }
-    var wired:Bool { interface.type == .wiredEthernet }
+    var isUSB:Bool { state.isUSB && (interface.type == .wiredEthernet || interface.type == .other) }
+    var wired:Bool { isUSB || interface.type == .wiredEthernet }
     var noRoutableAddress:Bool { !state.hasConfiguredAddress }
     var automaticAddressing:Bool { state.automaticAddressing }
     var label:String {
+        if isUSB { return "USB" }
         switch interface.type {
         case .wiredEthernet: return "Local Ethernet"
         case .wifi: return "Wi-Fi"
         default: return "Local network"
+        }
+    }
+    var transportKind:String {
+        if isUSB { return "usb" }
+        switch interface.type {
+        case .wiredEthernet: return "ethernet"
+        case .wifi: return "wifi"
+        default: return "other"
         }
     }
     func apply(to parameters:NWParameters) {
@@ -113,9 +128,11 @@ struct DirectLinkCandidate {
         parameters.includePeerToPeer = false
     }
     var metadata:[String:Any] {
-        ["interface":interfaceName,"interfaceIndex":interfaceIndex,"connection":label,
+        var result:[String:Any] = ["interface":interfaceName,"interfaceIndex":interfaceIndex,"connection":label,"transportKind":transportKind,
          "wired":wired,"automaticAddressing":automaticAddressing,"ipv6LinkLocal":state.hasIPv6LinkLocal,
          "networkSettingsChanged":false]
+        if isUSB, let usb = state.usb { result["usbEvidence"] = usb.source.rawValue }
+        return result
     }
 }
 
@@ -192,6 +209,9 @@ final class DirectLinkDiscovery {
             for interface in record.interfaces.sorted(by:{$0.index < $1.index}) {
                 guard interface.type != .loopback, interface.type != .cellular,
                       interface.index > 0, let state = states[interface.name], state.isUp else { continue }
+                // Apple Silicon has inactive USB NCM ports even with no cable.
+                // Do not keep trying one after macOS reports the link down.
+                if state.usb?.linkActive == false { continue }
                 let key = "\(id)|\(interface.index)|\(name)|\(type)|\(domain)"
                 guard keys.insert(key).inserted else { continue }
                 next.append(DirectLinkCandidate(id:id,name:String(name.prefix(160)),
@@ -202,7 +222,7 @@ final class DirectLinkDiscovery {
             if next.count >= 64 { break }
         }
         next.sort { $0.rank != $1.rank ? $0.rank < $1.rank : $0.key < $1.key }
-        let newFingerprint = next.map { "\($0.key):\($0.rank):\($0.state.hasLinkLocal):\($0.state.hasIPv6LinkLocal):\($0.noRoutableAddress)" }.joined(separator:"\n")
+        let newFingerprint = next.map { "\($0.key):\($0.rank):\($0.transportKind):\($0.state.usb?.source.rawValue ?? "none"):\($0.state.hasLinkLocal):\($0.state.hasIPv6LinkLocal):\($0.noRoutableAddress)" }.joined(separator:"\n")
         guard newFingerprint != fingerprint else { return }
         fingerprint = newFingerprint; candidates = next; onChange?(next)
     }
