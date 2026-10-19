@@ -1,6 +1,6 @@
 # Developer ID releases
 
-The 0.8.3 build 66 release is prepared from a clean source commit. It adds Host-delivered Viewer updates while retaining the public feed addresses, signing keys and pairing identity. Public publication checks are recorded separately from the completed 0.8.3 hardware tests in [VALIDATION.md](VALIDATION.md). The previous public release is 0.8.2 build 62.
+The 0.8.3 build 67 release is prepared from a clean source commit. It adds Host-delivered Viewer updates while retaining the public feed addresses, signing keys and pairing identity. Public publication checks are recorded separately from the completed 0.8.3 hardware tests in [VALIDATION.md](VALIDATION.md). The previous public release is 0.8.2 build 62.
 
 The **0.8.1 build 61** bootstrap configures public signed updates for `apkdmg/RetinaLink` and packages the GNU GPLv3 license and third-party notices. The feed base is `https://apkdmg.github.io/RetinaLink/updates`; update ZIPs use flat, versioned GitHub Release asset URLs. Existing 0.8.0 apps need one compatible signed replacement to acquire the public feed URL, retaining their existing pairing. Build, notarization and publication results are recorded in [VALIDATION.md](VALIDATION.md); changing source configuration alone does not activate hosting or old installations.
 

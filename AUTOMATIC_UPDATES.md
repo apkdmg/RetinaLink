@@ -28,7 +28,7 @@ Host reports downloading, transfer, verification and installation separately. It
 
 ## GitHub hosting
 
-The public repository is configured as `apkdmg/RetinaLink`. Version 0.8.1 introduced these pinned public feeds. Release **0.8.3 build 66** uses the same addresses and signing key:
+The public repository is configured as `apkdmg/RetinaLink`. Version 0.8.1 introduced these pinned public feeds. Release **0.8.3 build 67** uses the same addresses and signing key:
 
 - Host: `https://apkdmg.github.io/RetinaLink/updates/host/appcast.xml`
 - Viewer: `https://apkdmg.github.io/RetinaLink/updates/viewer/appcast.xml`
@@ -42,10 +42,10 @@ The public Viewer 0.8.1/build 61 → 0.8.2/build 62 update was exercised on the 
 Signing and notarization happen on the developer's Mac using the existing Keychain identities. GitHub does not receive Developer ID private keys, update-signing keys, notarization passwords or pairing credentials. Network peers cannot replace the pinned public feed address. The repository and corresponding source are GNU GPLv3; the release preserves Sparkle's own notices.
 
 ```sh
-python3 Tools/release.py prepare --directory work/release-0.8.3-build66
-python3 Tools/release.py advance --directory work/release-0.8.3-build66
+python3 Tools/release.py prepare --directory work/release-0.8.3-build67
+python3 Tools/release.py advance --directory work/release-0.8.3-build67
 # Repeat advance after Apple processing, until complete.
-python3 Tools/release.py update-feed --directory work/release-0.8.3-build66 \
+python3 Tools/release.py update-feed --directory work/release-0.8.3-build67 \
   --updates-directory outputs/github-updates-0.8.3 \
   --archive-base-url https://github.com/apkdmg/RetinaLink/releases/download/v0.8.3
 ```
@@ -65,7 +65,7 @@ python3 Tools/source_archive.py --commit FULL_SOURCE_COMMIT \
   --output outputs/RetinaLink-0.8.3-source.tar.gz \
   --manifest work/github-publication-0.8.3/source-manifest.json
 python3 Tools/publish_github.py plan \
-  --directory work/release-0.8.3-build66 \
+  --directory work/release-0.8.3-build67 \
   --feeds outputs/github-updates-0.8.3 \
   --source-archive outputs/RetinaLink-0.8.3-source.tar.gz \
   --source-manifest work/github-publication-0.8.3/source-manifest.json \
