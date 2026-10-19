@@ -93,10 +93,13 @@ if CommandLine.arguments.contains("--probe-display") {
 }
 #endif
 let app = NSApplication.shared
-app.setActivationPolicy(.regular)
 #if HOST
+// Start without a Dock flash. Manual launches promote when presenting controls;
+// login-agent launches stay in the menu bar without stealing focus.
+app.setActivationPolicy(.accessory)
 let delegate = HostApp()
 #else
+app.setActivationPolicy(.regular)
 let delegate = ViewerApp()
 #endif
 app.delegate = delegate

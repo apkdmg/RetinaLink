@@ -302,6 +302,7 @@ final class HostApp: NSObject, NSApplicationDelegate {
     var nativeSetupController:NativeHostSetup?
     var forgettingNative = false
     var homeTimer: Timer?, statusItem: NSStatusItem?
+    var windowLifecycle: HostWindowLifecycle?
     var updatingViewer = false
     var updateButton: NSButton?
     let softwareUpdater = AutomaticUpdater()
@@ -340,7 +341,10 @@ final class HostApp: NSObject, NSApplicationDelegate {
         pairingModeChanged()
         addresses.stringValue = localAddresses()
         makeHome()
-        NSApp.activate(ignoringOtherApps:true)
+        if let statusItem = statusItem {
+            let lifecycle = HostWindowLifecycle(home:window,statusItem:statusItem)
+            windowLifecycle = lifecycle; lifecycle.start(background:LaunchOptions.has("--autostart"))
+        }
         DiagnosticLog.shared.record("launch", "Host ready; activity \(!LaunchOptions.has("--no-streaming-activity")); capture depth \(LaunchOptions.value("--capture-depth") ?? "5"); tile layout \(!LaunchOptions.has("--row-major-encoder")); reusable packer \(!LaunchOptions.has("--baseline-packing")); baseline encoder \(LaunchOptions.has("--baseline-encoder")); inline capture \(LaunchOptions.has("--inline-capture"))")
         if LaunchOptions.has("--autostart") || reconnectEnabled { start() }
         if reconnectEnabled { startTunnel() }
@@ -378,7 +382,7 @@ final class HostApp: NSObject, NSApplicationDelegate {
         let content = Design.vertical([title,heading,hero,automatic,software,footer,details],spacing:20)
         heading.widthAnchor.constraint(equalTo:content.widthAnchor).isActive = true
         for card in [hero,automatic,software,details] { card.widthAnchor.constraint(equalTo:content.widthAnchor).isActive = true }
-        window = Design.window("RetinaLink",content:content,width:940,height:880)
+        window = Design.window("RetinaLink",content:content,width:940,height:880,show:false)
         let item = NSStatusBar.system.statusItem(withLength:NSStatusItem.squareLength)
         if #available(macOS 11.0, *) { item.button?.image = NSImage(systemSymbolName:"display.2",accessibilityDescription:"RetinaLink") }
         let menu = NSMenu()
@@ -415,7 +419,8 @@ final class HostApp: NSObject, NSApplicationDelegate {
         }
         if let path = LaunchOptions.value("--ui-state-path") ?? Optional(NSHomeDirectory()+"/Library/Logs/RetinaLink/Host-ui.json") {
             let state: [String:Any] = ["version":LaunchOptions.version,"build":LaunchOptions.build,"pid":ProcessInfo.processInfo.processIdentifier,"trusted":reconnectEnabled,"paused":displayPaused,"listening":listener != nil,"streaming":capture != nil && helloReceived,"setupStage":nativeSetupController?.stage ?? setupController?.stage ?? "closed","fileVault":DeviceSettings.binding?.fileVault.rawValue ?? "unknown","transport":NativeConnectionSettings.enabled ? "direct-tls" : "legacy-ssh","requiresRemoteLogin":!NativeConnectionSettings.enabled,"connectionID":link?.traceID ?? "","provisionalConnections":pending.count,"connectionPath":link.map { DirectLinkPath.metadata(connection:$0.connection) } ?? [:],"networkSettingsChanged":false,"time":Date().timeIntervalSince1970]
-            if let data = try? JSONSerialization.data(withJSONObject:state,options:.sortedKeys) { try? data.write(to:URL(fileURLWithPath:path),options:.atomic); try? FileManager.default.setAttributes([.posixPermissions:0o600],ofItemAtPath:path) }
+            var report = state; report["windowPresentation"] = windowLifecycle?.metadata ?? [:]
+            if let data = try? JSONSerialization.data(withJSONObject:report,options:.sortedKeys) { try? data.write(to:URL(fileURLWithPath:path),options:.atomic); try? FileManager.default.setAttributes([.posixPermissions:0o600],ofItemAtPath:path) }
         }
     }
     func consumeTestCommand() {
@@ -447,7 +452,10 @@ final class HostApp: NSObject, NSApplicationDelegate {
         default: break
         }
     }
-    @objc func openHome() { window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps:true) }
+    @objc func openHome() { windowLifecycle?.showHome() }
+    func applicationShouldHandleReopen(_ sender:NSApplication,hasVisibleWindows:Bool) -> Bool {
+        openHome(); return false
+    }
     @objc func automaticUpdatesChanged() { setAutomaticUpdates(automaticUpdates.state == .on) }
     func setAutomaticUpdates(_ enabled: Bool) {
         softwareUpdater.setAutomatic(enabled); automaticUpdates.state = enabled ? .on : .off
@@ -459,6 +467,7 @@ final class HostApp: NSObject, NSApplicationDelegate {
         peer.send(6,data)
     }
     @objc func updateBothNow() {
+        openHome()
         let alert = NSAlert(); alert.messageText = "Update RetinaLink on both Macs?"
         alert.informativeText = "RetinaLink checks for signed updates and installs any available versions. Your display may reconnect briefly. Pairing and login settings stay unchanged."
         alert.addButton(withTitle:"Update Now"); alert.addButton(withTitle:"Later")
@@ -533,6 +542,7 @@ final class HostApp: NSObject, NSApplicationDelegate {
         if let controller = setupController { controller.dedicated.state = .on; controller.advance() }
     }
     @objc func addDisplay() {
+        windowLifecycle?.prepareForControls()
         if nativeSetupController == nil {
             let controller = NativeHostSetup(); nativeSetupController = controller
             controller.onPrepared = { [weak self] in self?.enrollmentCompleted($0) }
@@ -540,6 +550,7 @@ final class HostApp: NSObject, NSApplicationDelegate {
         nativeSetupController?.show()
     }
     func legacyDisplaySetup() {
+        windowLifecycle?.prepareForControls()
         if setupController == nil { setupController = HostSetupController(host:self) }
         setupController?.show()
     }
@@ -792,7 +803,7 @@ final class HostApp: NSObject, NSApplicationDelegate {
             if reconnect && self.reconnectEnabled && !self.quitting { DispatchQueue.main.asyncAfter(deadline:.now()+0.6) { [weak self] in self?.start() } }
         }
     }
-    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { !reconnectEnabled }
-    func applicationWillTerminate(_ notification: Notification) { quitting = true; homeTimer?.invalidate(); tunnel?.stop(); listener?.cancel(); link?.cancel(); startup?.cancel(); capture = nil }
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
+    func applicationWillTerminate(_ notification: Notification) { quitting = true; windowLifecycle?.stop(); homeTimer?.invalidate(); tunnel?.stop(); listener?.cancel(); link?.cancel(); startup?.cancel(); capture = nil }
 }
 #endif

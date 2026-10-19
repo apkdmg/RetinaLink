@@ -38,7 +38,7 @@ enum Design {
         for view in views { view.widthAnchor.constraint(lessThanOrEqualTo:stack.widthAnchor).isActive = true }
         return effect
     }
-    static func window(_ title: String, content: NSView, width: CGFloat = 820, height: CGFloat = 720, footer: NSView? = nil) -> NSWindow {
+    static func window(_ title: String, content: NSView, width: CGFloat = 820, height: CGFloat = 720, footer: NSView? = nil, show: Bool = true) -> NSWindow {
         let window = NSWindow(contentRect:NSRect(x:0,y:0,width:width,height:height),styleMask:[.titled,.closable,.miniaturizable,.resizable,.fullSizeContentView],backing:.buffered,defer:false)
         window.title = title; window.titlebarAppearsTransparent = true; window.isReleasedWhenClosed = false
         window.minSize = NSSize(width:640,height:540)
@@ -57,7 +57,7 @@ enum Design {
             let rule = NSBox(); rule.boxType = .separator; rule.translatesAutoresizingMaskIntoConstraints = false; bar.addSubview(rule)
             NSLayoutConstraint.activate([bar.leadingAnchor.constraint(equalTo:background.leadingAnchor),bar.trailingAnchor.constraint(equalTo:background.trailingAnchor),bar.bottomAnchor.constraint(equalTo:background.bottomAnchor),scroll.bottomAnchor.constraint(equalTo:bar.topAnchor),footer.trailingAnchor.constraint(equalTo:bar.trailingAnchor,constant:-28),footer.leadingAnchor.constraint(greaterThanOrEqualTo:bar.leadingAnchor,constant:28),footer.topAnchor.constraint(equalTo:bar.topAnchor,constant:15),footer.bottomAnchor.constraint(equalTo:bar.bottomAnchor,constant:-15),rule.leadingAnchor.constraint(equalTo:bar.leadingAnchor),rule.trailingAnchor.constraint(equalTo:bar.trailingAnchor),rule.topAnchor.constraint(equalTo:bar.topAnchor)])
         } else { scroll.bottomAnchor.constraint(equalTo:background.bottomAnchor).isActive = true }
-        window.center(); window.makeKeyAndOrderFront(nil); return window
+        window.center(); if show { window.makeKeyAndOrderFront(nil) }; return window
     }
     static func formField(_ title: String, field: NSTextField, hint: String? = nil) -> NSView {
         field.bezelStyle = .roundedBezel; field.font = .systemFont(ofSize:14)

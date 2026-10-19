@@ -1,5 +1,19 @@
 # Reproducing the local two-Mac tests
 
+## Host window and menu-bar lifecycle
+
+The bounded native test uses the production `HostWindowLifecycle` controller with real AppKit windows and an isolated preference suite. It exercises red close, reopening, the one-time popover, a remaining setup window, yellow minimize and observer cleanup. It never reads production pairing or starts capture, network connections or an updater. Run in a logged-in Mac GUI session:
+
+```sh
+mkdir -p work/host-window-test/cache
+xcrun swiftc -swift-version 5 -module-cache-path work/host-window-test/cache \
+  Sources/HostWindowLifecycle.swift Tools/HostLifecycleTest/main.swift \
+  -framework AppKit -o work/host-window-test/HostLifecycleTest
+work/host-window-test/HostLifecycleTest "$PWD/work/host-window-test/result.json"
+```
+
+The test may briefly show its own disposable windows and menu-bar hint; it does not use the UI capture helper. This checks AppKit activation policy, not a screenshot of the Dock. A user-pinned Dock shortcut is not removed. Installed streaming continuity and launch-agent startup are separate live checks, recorded in `VALIDATION.md`.
+
 Developer ID signing, notarization and pairing-preserving Viewer replacements are described in [RELEASING.md](../RELEASING.md). `release.py doctor`, `credentials`, `prepare` and `advance` use a dedicated Keychain profile without storing secrets in the repository. `python3 -m unittest discover -s Tests -p test_release.py -v` runs offline release-policy tests; those do not count as actual notarization or signed-upgrade validation.
 
 ## Native Installer delivery checks

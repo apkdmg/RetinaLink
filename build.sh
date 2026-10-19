@@ -27,7 +27,7 @@ fi
 COMMON=(Sources/Protocol.swift Sources/Metrics.swift Sources/Diagnostics.swift Sources/DisplayClock.swift Sources/CaptureMailbox.swift Sources/Graphics.swift Sources/Enrollment.swift Sources/Signing.swift Sources/Updates.swift Sources/Design.swift Sources/UI.swift Sources/NativePairing.swift Sources/USBLink.swift Sources/DirectLink.swift Sources/DirectLinkRouting.swift Sources/DirectLinkProbe.swift Sources/NativeConnection.swift Sources/NativeHostSetup.swift Sources/NativeTestHarness.swift Sources/Viewer.swift Sources/HostProvisioning.swift Sources/HostSetup.swift Sources/DedicatedDisplay.swift Sources/main.swift Tests/SelfTests.swift Tests/NativeTests.swift Tests/USBLinkTests.swift Tests/DirectLinkTests.swift Tests/DirectLinkSafetyTests.swift)
 FLAGS=(-O -whole-module-optimization -swift-version 5 -sdk "$SDK" -module-cache-path "$RETINALINK_BUILD_DIR/cache" -F "$SPARKLE_DIR" -framework Sparkle -Xlinker -rpath -Xlinker @executable_path/../Frameworks -framework AppKit -framework Network -framework IOKit -framework Security -framework Metal -framework QuartzCore -framework CoreVideo -framework CoreMedia -lcompression)
 xcrun clang -fobjc-arc -arch arm64 -mmacosx-version-min=13.0 -isysroot "$SDK" -c Sources/VirtualDisplay.m -o "$RETINALINK_BUILD_DIR/VirtualDisplay.o"
-xcrun swiftc "${FLAGS[@]}" -target arm64-apple-macos13.0 -D HOST -import-objc-header Sources/VirtualDisplay.h "${COMMON[@]}" Sources/Host.swift Sources/CaptureProbe.swift "$RETINALINK_BUILD_DIR/VirtualDisplay.o" -framework ScreenCaptureKit -o "$RETINALINK_BUILD_DIR/Host"
+xcrun swiftc "${FLAGS[@]}" -target arm64-apple-macos13.0 -D HOST -import-objc-header Sources/VirtualDisplay.h "${COMMON[@]}" Sources/Host.swift Sources/HostWindowLifecycle.swift Sources/CaptureProbe.swift "$RETINALINK_BUILD_DIR/VirtualDisplay.o" -framework ScreenCaptureKit -o "$RETINALINK_BUILD_DIR/Host"
 for ARCH in arm64 x86_64; do
     MIN=10.15; if [ "$ARCH" = arm64 ]; then MIN=11.0; fi
     xcrun swiftc "${FLAGS[@]}" -target "$ARCH-apple-macos$MIN" "${COMMON[@]}" -o "$RETINALINK_BUILD_DIR/Viewer-$ARCH"
@@ -67,6 +67,7 @@ for ROLE in Host Viewer; do
 <key>NSBonjourServices</key><array><string>_retinalink._tcp</string><string>_retina-pair._tcp</string><string>_ssh._tcp</string></array>
 </dict></plist>
 PLIST
+    if [ "$ROLE" = Host ]; then /usr/libexec/PlistBuddy -c 'Add :LSUIElement bool true' "$APP/Contents/Info.plist"; fi
     python3 Tools/sparkle.py configure --app "$APP" --role "$ROLE"
     mkdir -p "$APP/Contents/Frameworks"
     ditto "$SPARKLE_DIR/Sparkle.framework" "$APP/Contents/Frameworks/Sparkle.framework"

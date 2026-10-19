@@ -30,7 +30,9 @@ If discovery is blocked, Host also accepts a local hostname or IP address. On a 
 
 ## Everyday use
 
-Keep Host running on your main Mac. Closing its window leaves it available in the menu bar. Viewer opens fullscreen after iMac sign-in when startup is enabled.
+Keep Host running on your main Mac. In Host 0.8.2 and later, clicking the red close button hides its window and running Dock icon while the display stays connected. The first close shows a brief hint pointing to RetinaLink in the menu bar. Choose **Open RetinaLink** there to restore the window and Dock icon. Clicking the yellow minimize button keeps the Dock icon, as usual. A Dock shortcut you have manually pinned remains under macOS's control.
+
+Automatic Host startup after sign-in runs quietly in the menu bar, without opening its window or taking focus. Opening the installed Host again brings its controls forward. Choose **Quit RetinaLink** explicitly to exit; closing the window is not a disconnect or quit action. Viewer opens fullscreen after iMac sign-in when startup is enabled.
 
 Host provides these controls:
 
