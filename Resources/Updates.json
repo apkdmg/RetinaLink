@@ -1,5 +1,5 @@
 {
-  "baseURL": null,
+  "baseURL": "https://apkdmg.github.io/RetinaLink/updates",
   "publicEdKey": "27kS9zjGufmCxwkl+9+xXENDEVHLHK2TDemTOMDnKa4=",
   "keychainAccount": "RetinaLink-Updates",
   "checkInterval": 86400,

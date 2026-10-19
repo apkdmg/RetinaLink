@@ -1,12 +1,12 @@
 # RetinaLink
 
-RetinaLink 0.8.0 (build 60) adds automatic direct USB discovery and reconnection alongside Ethernet. An Apple silicon Host can connect directly from a rear USB-C port to an older Intel iMac's USB-A port. RetinaLink uses macOS's existing automatic network addresses over the cable; users do not enter IP addresses, enable Remote Login or change their company connection. Existing pairs reuse their original Keychain credential and binding; FileVault and login settings remain unchanged. Host has a signed native Apple Installer package as well as its drag-to-Applications DMG. Viewer has a separate DMG, and Host includes an exportable signed Viewer archive.
+RetinaLink 0.8.1 (build 61) configures signed updates through GitHub Releases and GitHub Pages, with GNU GPLv3 source and bundled license notices. It retains automatic direct USB discovery and reconnection alongside Ethernet. An Apple silicon Host can connect directly from a rear USB-C port to an older Intel iMac's USB-A port. RetinaLink uses macOS's existing automatic network addresses over the cable; users do not enter IP addresses, enable Remote Login or change their company connection. Existing pairs reuse their original Keychain credential and binding; FileVault and login settings remain unchanged. Host has a signed native Apple Installer package; Viewer has a separate drag-to-Applications DMG, and Host includes an exportable signed Viewer archive.
 
-Turn a Retina iMac into an unattended second display. Install Viewer on the iMac once, approve your main Mac, then use Host for everyday controls. Viewer stays fullscreen, shows a quiet standby screen when disconnected, and reconnects without a daily code or click. See [DIRECT_ETHERNET.md](DIRECT_ETHERNET.md) for cable connections and their validation boundaries, [NATIVE_CONNECTION.md](NATIVE_CONNECTION.md) for authentication and migration, and [AUTOMATIC_UPDATES.md](AUTOMATIC_UPDATES.md) for signed updates. Public update hosting remains unconfigured.
+Turn a Retina iMac into an unattended second display. Install Viewer on the iMac once, approve your main Mac, then use Host for everyday controls. Viewer stays fullscreen, shows a quiet standby screen when disconnected, and reconnects without a daily code or click. See [DIRECT_ETHERNET.md](DIRECT_ETHERNET.md) for cable connections and their validation boundaries, [NATIVE_CONNECTION.md](NATIVE_CONNECTION.md) for authentication and migration, and [AUTOMATIC_UPDATES.md](AUTOMATIC_UPDATES.md) for signed updates. Releases through 0.8.0 need one normal signed replacement on both Macs to acquire the public feed addresses; compatible replacements keep their saved pairing.
 
 Host requires Apple silicon and macOS 13+. Viewer supports Intel macOS Catalina 10.15+ and Apple silicon macOS 11+. The current test receiver is a Late-2014 5K iMac on Big Sur 11.7.8 / AMD Radeon R9 M290X. One Viewer is supported at a time.
 
-Current installers: [Host 0.8.0 PKG](outputs/RetinaLink-Host-0.8.0.pkg) for the main Mac and [Viewer 0.8.0 DMG](outputs/RetinaLink-Viewer-0.8.0.dmg) for the iMac. Both contain Developer ID signed, Apple-notarized build 60. The Viewer DMG provides drag-to-Applications installation; update an existing Viewer in its original permanent location to retain a single app copy and saved pairing.
+Release downloads: [Host 0.8.1 PKG](https://github.com/apkdmg/RetinaLink/releases/download/v0.8.1/RetinaLink-Host-0.8.1.pkg) for the main Mac and [Viewer 0.8.1 DMG](https://github.com/apkdmg/RetinaLink/releases/download/v0.8.1/RetinaLink-Viewer-0.8.1.dmg) for the iMac. Publication status is recorded in [VALIDATION.md](VALIDATION.md). The Viewer DMG provides drag-to-Applications installation; update an existing Viewer in its original permanent location to retain a single app copy and saved pairing.
 
 ## Set up from Host
 
@@ -25,7 +25,7 @@ The existing test installs stay at `~/Applications/RetinaLink Host.app` on the S
 
 ## Receiving Host through WhatsApp
 
-Share **`outputs/RetinaLink-Host-0.8.0.pkg`** as a document. The recipient saves it, opens it in Apple's Installer, follows **Continue → Install**, then opens Host in Applications. This uses the received file; no Terminal commands or browser download are part of the flow. Quit a running Host before installing.
+Share **RetinaLink-Host-0.8.1.pkg** from the GitHub release as a document. The recipient saves it, opens it in Apple's Installer, follows **Continue → Install**, then opens Host in Applications. This uses the received file; no Terminal commands or browser download are part of the flow. Quit a running Host before installing.
 
 The package is Developer ID Installer signed, Apple-notarized and stapled, and contains the unchanged signed Host and bundled Viewer. It uses Apple's normal installation service, with no install scripts or changes to system security settings. Installing over the same developer's app retains its bundle identity and saved pairing. Existing macOS privacy approvals and any first-run prompts remain controlled by macOS.
 
@@ -39,11 +39,11 @@ Viewer has a borderless native-resolution window. On connection loss, it replace
 
 Viewer discovers its trusted Host and connects directly using the saved random TLS credential. Discovery cannot grant access: a peer must complete authenticated TLS before streaming. A verified Host address is retained as a fallback when discovery is unavailable. Updated existing pairs stop using the app-owned SSH display tunnel after the first authenticated direct connection. Their original pairing records and SSH keys are preserved, rather than silently regenerated or removed.
 
-Host controls signed Viewer updates through the authenticated app connection. Sparkle validates the signed feed and archive, and compatible Developer ID replacements preserve pairing. Public hosting is not yet configured; supplied signed apps can be installed in the same permanent locations. The legacy management-SSH replacement path remains only for older installations and advanced maintenance.
+Host controls signed Viewer updates through the authenticated app connection. Sparkle validates the signed feed and archive, and compatible Developer ID replacements preserve pairing. Version 0.8.1 pins public GitHub Pages feeds and downloads signed archives from versioned GitHub Releases. The legacy management-SSH replacement path remains only for older installations and advanced maintenance.
 
 ## Automatic USB
 
-Install matching 0.8.0 (build 60) Host and Viewer apps, then connect a data-capable USB-C-to-USB-A cable directly from a **rear USB-C port on the Apple silicon Mac Studio** to a USB-A port on the Intel iMac. The Intel Viewer requires macOS Catalina 10.15 or later. Leave both Macs' existing company-network cables connected. USB hubs, charging-only cables and USB-A-to-USB-A cables are not this connection method.
+Install matching 0.8.1 (build 61) Host and Viewer apps, then connect a data-capable USB-C-to-USB-A cable directly from a **rear USB-C port on the Apple silicon Mac Studio** to a USB-A port on the Intel iMac. The Intel Viewer requires macOS Catalina 10.15 or later. Leave both Macs' existing company-network cables connected. USB hubs, charging-only cables and USB-A-to-USB-A cables are not this connection method.
 
 macOS presents the cable as an NCM network interface and supplies automatic local addresses. RetinaLink discovers its trusted peer on that interface, authenticates with the existing TLS pairing and selects **USB** automatically. No manual IP address, new code, Remote Login or network settings changes are needed. If USB disappears, Viewer tries available alternatives and remains fullscreen; when USB returns, it authenticates the preferred route before switching back. Reconnection can briefly interrupt the picture. Hardware presence and Bonjour advertisements alone never establish trust.
 
@@ -92,3 +92,9 @@ Run `bash build.sh` with full Xcode installed. Version/build defaults come from 
 Both executables support `--self-test` and the read-only developer diagnostic `--usb-link-status`. The USB diagnostic reports interface evidence and link/address state without opening the pairing Keychain, authenticating a peer or changing network settings; it is not an end-user setup step. Host supports `--permission-test` for simulated permission-denial recovery. `Tools/test_display_setup.py` drives the actual Host setup controller and app-owned test controls, then reads state over SSH. It exercises enrollment, fullscreen standby, Host pause/resume, app crash recovery, login-agent startup, pairing removal/re-enrollment and tunnel repair. It does not reboot or change login/encryption policy. See `Tools/README.md` and `VALIDATION.md` for the tested boundaries.
 
 Metadata diagnostics are bounded and saved in `~/Library/Logs/RetinaLink/Host.json` / `Viewer.json`; Viewer also writes its current appliance state to `Viewer-ui.json`. They contain no pairing secrets or captured pixels. Frame traces and UI test controls are opt-in. Interface images in validation are rendered from the app’s own view hierarchy; they do not use a UI capture bridge or capture other applications.
+
+## License
+
+Copyright © 2026 RetinaLink contributors. RetinaLink is licensed under the **GNU General Public License, version 3 only** (`SPDX-License-Identifier: GPL-3.0-only`). See [LICENSE](LICENSE) for the complete terms. RetinaLink is provided without warranty.
+
+Third-party components keep their original licenses; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Binary releases must provide access to their corresponding source, including build instructions, as described in GPLv3 section 6.

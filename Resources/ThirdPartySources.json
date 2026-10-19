@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "dependencies": [
+    {
+      "name": "Sparkle",
+      "version": "2.9.6",
+      "repository": "https://github.com/sparkle-project/Sparkle",
+      "commit": "ac2def288cbff5cfc7df3ffef6abdf45b72bcb0a",
+      "archiveURL": "https://codeload.github.com/sparkle-project/Sparkle/tar.gz/ac2def288cbff5cfc7df3ffef6abdf45b72bcb0a",
+      "archiveSHA256": "49c528efd86801a378ba7196da3ac9722a1165fbf4813ed76c9d636ad054fb9e",
+      "archiveRoot": "Sparkle-ac2def288cbff5cfc7df3ffef6abdf45b72bcb0a",
+      "binaryArchiveSHA256": "52bf9e88cdd972fc0c81501377a880e90d47031bd8ca5462488f843e2609e192",
+      "submodules": [],
+      "requiredSourcePaths": [
+        ".gitmodules",
+        "LICENSE",
+        "Makefile",
+        "Sparkle.xcodeproj/project.pbxproj",
+        "Vendor/bsdiff/bsdiff.c",
+        "Vendor/bsdiff/bspatch.c",
+        "Vendor/bsdiff/sais.c",
+        "Vendor/ed25519-sparkle/license.txt",
+        "Vendor/ed25519-sparkle/src/sign.c"
+      ]
+    }
+  ]
+}

@@ -20,7 +20,10 @@ mkdir -p "$RETINALINK_BUILD_DIR/cache" "$RETINALINK_BUILD_DIR/apps"
 RETINALINK_BUILD_DIR="$(cd "$RETINALINK_BUILD_DIR" && pwd)"
 SDK="${RETINALINK_SDK:-$(xcode-select -p)/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk}"
 if [ ! -d "$SDK" ]; then SDK="$(xcrun --show-sdk-path)"; fi
-SPARKLE_DIR=$(python3 Tools/sparkle.py fetch)
+SPARKLE_DIR="${RETINALINK_SPARKLE_DIR:-$(python3 Tools/sparkle.py fetch)}"
+if [ ! -d "$SPARKLE_DIR/Sparkle.framework" ] || [ ! -f "$SPARKLE_DIR/LICENSE" ]; then
+    echo 'Sparkle directory must contain Sparkle.framework and its LICENSE.' >&2; exit 1
+fi
 COMMON=(Sources/Protocol.swift Sources/Metrics.swift Sources/Diagnostics.swift Sources/DisplayClock.swift Sources/CaptureMailbox.swift Sources/Graphics.swift Sources/Enrollment.swift Sources/Signing.swift Sources/Updates.swift Sources/Design.swift Sources/UI.swift Sources/NativePairing.swift Sources/USBLink.swift Sources/DirectLink.swift Sources/DirectLinkRouting.swift Sources/DirectLinkProbe.swift Sources/NativeConnection.swift Sources/NativeHostSetup.swift Sources/NativeTestHarness.swift Sources/Viewer.swift Sources/HostProvisioning.swift Sources/HostSetup.swift Sources/DedicatedDisplay.swift Sources/main.swift Tests/SelfTests.swift Tests/NativeTests.swift Tests/USBLinkTests.swift Tests/DirectLinkTests.swift Tests/DirectLinkSafetyTests.swift)
 FLAGS=(-O -whole-module-optimization -swift-version 5 -sdk "$SDK" -module-cache-path "$RETINALINK_BUILD_DIR/cache" -F "$SPARKLE_DIR" -framework Sparkle -Xlinker -rpath -Xlinker @executable_path/../Frameworks -framework AppKit -framework Network -framework IOKit -framework Security -framework Metal -framework QuartzCore -framework CoreVideo -framework CoreMedia -lcompression)
 xcrun clang -fobjc-arc -arch arm64 -mmacosx-version-min=13.0 -isysroot "$SDK" -c Sources/VirtualDisplay.m -o "$RETINALINK_BUILD_DIR/VirtualDisplay.o"
@@ -39,6 +42,8 @@ for ROLE in Host Viewer; do
     cp "$RETINALINK_BUILD_DIR/$ROLE" "$APP/Contents/MacOS/RetinaLink"
     cp Resources/Shaders.metal "$APP/Contents/Resources/"
     cp Resources/AppIcon.icns "$APP/Contents/Resources/"
+    cp LICENSE "$APP/Contents/Resources/LICENSE.txt"
+    cp THIRD_PARTY_NOTICES.md "$APP/Contents/Resources/THIRD_PARTY_NOTICES.md"
     if [ "$ROLE" = Host ]; then cp "$RETINALINK_BUILD_DIR/RetinaLinkDedicatedSetup" "$APP/Contents/Resources/"; fi
     MIN=10.15; if [ "$ROLE" = Host ]; then MIN=13.0; fi
     cat > "$APP/Contents/Info.plist" <<PLIST

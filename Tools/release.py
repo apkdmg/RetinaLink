@@ -241,12 +241,19 @@ def update_feed(args):
     local = args.local_test and url.scheme == 'http' and url.hostname == '127.0.0.1' and url.port and url.path in ('', '/')
     if not base or (url.scheme != 'https' and not local) or not url.hostname or url.username or url.password or url.query or url.fragment:
         raise ValueError('Use an HTTPS update base URL, or an explicit --local-test loopback HTTP origin.')
+    archive_base = getattr(args, 'archive_base_url', None)
+    if archive_base is not None:
+        archive_url = urllib.parse.urlparse(archive_base)
+        if archive_url.scheme != 'https' or not archive_url.hostname or archive_url.username or archive_url.password or archive_url.query or archive_url.fragment:
+            raise ValueError('The archive base URL must be an HTTPS prefix without credentials, query or fragment.')
+        archive_base = archive_base.rstrip('/')
     output = args.updates_directory.resolve()
     sparkle = fetch()
     public = subprocess.check_output([str(sparkle/'bin/generate_keys'), '--account', CONFIG['keychainAccount'], '-p'], text=True).strip()
     if public != CONFIG['publicEdKey']:
         raise ValueError('Update-signing Keychain public key does not match the key pinned in the apps.')
-    manifest = {'version':state['apps']['Host']['version'], 'build':state['apps']['Host']['build'], 'baseURL':base, 'roles':{}}
+    manifest = {'version':state['apps']['Host']['version'], 'build':state['apps']['Host']['build'], 'baseURL':base,
+                'archiveBaseURL':archive_base, 'roles':{}}
     for role in ['Host', 'Viewer']:
         app = directory/f'build/apps/RetinaLink {role}.app'
         if verify_app(app,state['identity'],role) != state['apps'][role]:
@@ -254,12 +261,19 @@ def update_feed(args):
         info = plistlib.loads((app/'Contents/Info.plist').read_bytes())
         if info.get('SUPublicEDKey') != public or not info.get('SURequireSignedFeed') or not info.get('SUVerifyUpdateBeforeExtraction'):
             raise ValueError(role+' does not enforce the expected update signing policy')
+        feed_url = base.rstrip('/')+'/'+role.lower()+'/appcast.xml'
+        if not local and info.get('SUFeedURL') != feed_url:
+            raise ValueError(role+' does not pin this production feed URL. Build and notarize a new release with the public update configuration.')
+        download_prefix = (archive_base or base.rstrip('/')+'/'+role.lower())+'/'
         folder = output/role.lower(); folder.mkdir(parents=True,exist_ok=True)
         upload = folder/f'RetinaLink-{role}-{info["CFBundleShortVersionString"]}-{info["CFBundleVersion"]}.zip'
         records_file = folder/'.release-records.json'
-        records = json.loads(records_file.read_text()) if records_file.exists() else {'baseURL':base,'archives':{}}
-        if records['baseURL'] != base:
-            raise ValueError('Use a fresh staging directory when changing the update server URL.')
+        records = json.loads(records_file.read_text()) if records_file.exists() else {'baseURL':base,'archiveBaseURL':archive_base,'archives':{}}
+        if records['baseURL'] != base or records.get('archiveBaseURL') != archive_base:
+            raise ValueError('Use a fresh staging directory when changing the feed or archive server URL.')
+        # A missing archiveBaseURL is the legacy same-origin layout. Retain
+        # compatibility, but record the layout explicitly on the next write.
+        records['archiveBaseURL'] = archive_base
         expected_executable = state['apps'][role]['executable_sha256']
         if upload.exists():
             record = records['archives'].get(upload.name)
@@ -268,13 +282,14 @@ def update_feed(args):
         else:
             archive(app,upload)
             records['archives'][upload.name] = {'sha256':digest(upload),'executableSHA256':expected_executable}
-            temporary = records_file.with_suffix('.next')
-            temporary.write_text(json.dumps(records,indent=2)+'\n'); temporary.replace(records_file)
+        temporary = records_file.with_suffix('.next')
+        temporary.write_text(json.dumps(records,indent=2)+'\n'); temporary.replace(records_file)
         run([sparkle/'bin/generate_appcast','--account',CONFIG['keychainAccount'],
-             '--download-url-prefix',base.rstrip('/')+'/'+role.lower()+'/',
+             '--download-url-prefix',download_prefix,
              '--maximum-deltas','0','--maximum-versions','2',folder])
         run([sparkle/'bin/sign_update','--account',CONFIG['keychainAccount'],'--verify',folder/'appcast.xml'])
-        manifest['roles'][role] = {'archive':upload.name,'sha256':digest(upload),'feedSHA256':digest(folder/'appcast.xml')}
+        manifest['roles'][role] = {'archive':upload.name,'sha256':digest(upload),'feedSHA256':digest(folder/'appcast.xml'),
+                                   'archiveURL':download_prefix+upload.name,'feedURL':feed_url}
     (output/'release.json').write_text(json.dumps(manifest,indent=2)+'\n')
     print('Signed Host and Viewer feeds staged; nothing uploaded: '+str(output))
     return 0
@@ -290,6 +305,7 @@ def main():
                         default=ROOT/f'work/release-{version["version"]}-build{version["build"]}')
     parser.add_argument('--build-number', type=int)
     parser.add_argument('--update-base-url')
+    parser.add_argument('--archive-base-url', help='HTTPS prefix for flat immutable update assets, such as a versioned GitHub Release URL; defaults to each role\'s feed directory')
     parser.add_argument('--updates-directory', type=pathlib.Path, default=ROOT/'outputs/updates')
     parser.add_argument('--local-test', action='store_true')
     args = parser.parse_args()

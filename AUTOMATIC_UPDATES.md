@@ -14,21 +14,59 @@ Both appcasts and update archives require Ed25519 signatures. Archives are verif
 
 Keep the same bundle identifiers, signing team, designated requirements, Keychain namespace and installation paths. The app's updater does not weaken Keychain ACLs or privacy settings.
 
-## Public hosting is deliberately unconfigured
+## GitHub hosting
 
-The owner chose to test locally before selecting hosting. `Resources/Updates.json` therefore has `baseURL: null`. A normal launch reports that release hosting is not configured and starts no updater network checks. There is no invented public endpoint. Both Macs will need HTTPS access to the chosen update service.
+The public repository is configured as `apkdmg/RetinaLink`. Version 0.8.1 build 61 pins these signed feeds in its app bundles:
 
-When hosting is selected, set `baseURL` to a stable HTTPS prefix you control, for example `https://YOUR-DOMAIN/retinalink`. Build and notarize the first production release with that value before giving it to users. The signed app pins its role-specific feed URL; network peers cannot replace it with an arbitrary public URL.
+- Host: `https://apkdmg.github.io/RetinaLink/updates/host/appcast.xml`
+- Viewer: `https://apkdmg.github.io/RetinaLink/updates/viewer/appcast.xml`
+
+GitHub Pages serves only the signed XML and the `.nojekyll` marker. Versioned GitHub Releases serve the notarized role-specific ZIP archives, Host PKG, Viewer DMG and matching corresponding source archive. Both Macs need outbound HTTPS access to these GitHub domains. Publishing status and external byte/signature checks are recorded in [VALIDATION.md](VALIDATION.md).
+
+**Releases through 0.8.0 have no public feed address.** They require one normal signed replacement on both Macs to acquire this configuration. Publishing a feed cannot activate those old binaries remotely. Keep their existing application paths, bundle identifiers, Developer ID team and pairing; do not enroll them again. After the bootstrap, compatible signed updates use the public feeds.
+
+Signing and notarization happen on the developer's Mac using the existing Keychain identities. GitHub does not receive Developer ID private keys, update-signing keys, notarization passwords or pairing credentials. Network peers cannot replace the pinned public feed address. The repository and corresponding source are GNU GPLv3; the release preserves Sparkle's own notices.
 
 ```sh
-python3 Tools/release.py prepare --directory work/NEW-RELEASE
-python3 Tools/release.py advance --directory work/NEW-RELEASE
+python3 Tools/release.py prepare --directory work/release-0.8.1-build61
+python3 Tools/release.py advance --directory work/release-0.8.1-build61
 # Repeat advance after Apple processing, until complete.
-python3 Tools/release.py update-feed --directory work/NEW-RELEASE \
-  --updates-directory outputs/updates
+python3 Tools/release.py update-feed --directory work/release-0.8.1-build61 \
+  --updates-directory outputs/github-updates-0.8.1 \
+  --archive-base-url https://github.com/apkdmg/RetinaLink/releases/download/v0.8.1
 ```
 
-The last command creates `host/appcast.xml`, `viewer/appcast.xml` and separate notarized ZIPs for each role, signed with the Keychain update key. It does not upload or publish. Upload each role's archives before its appcast, preserve the signed XML bytes, and retain immutable versioned archive URLs. Publish only appcasts and archives; local `.release-records.json` files are publisher bookkeeping. Reusing a staging directory with a different server URL or changed archive is rejected. Bump the build number for every release.
+The last command creates `host/appcast.xml`, `viewer/appcast.xml` and separate notarized ZIPs for each role, signed with the Keychain update key. `--archive-base-url` supplies the flat versioned release-asset prefix before the appcast is signed; XML must never be rewritten afterward. It does not upload or publish. The normal same-origin role-directory layout remains available when the override is absent, including local tests.
+
+Publish and verify every release asset before updating the public feeds. Existing public versioned assets must not be overwritten. The publisher retains exact signed XML bytes, publishes only the feeds and `.nojekyll` marker on `gh-pages`, and excludes local `.release-records.json` bookkeeping. Feed and archive origins are pinned in staging records; changing either destination or an existing archive requires a fresh staging directory or a new build. Bump the build number for every release. Public Git pushes must name the intended branch or tag explicitly; never mirror local testing or Codex metadata refs.
+
+## Publish a reviewed release
+
+Commit the release configuration and build from a clean checkout of that exact source commit. Do not include local logs, credentials, testing refs or unrelated untracked files. The publisher requires the release's recorded clean commit to be on the public repository first; it will not move an existing tag or replace a published asset. Build and notarize the Host PKG and Viewer DMG from those completed apps using [RELEASING.md](RELEASING.md).
+
+Generate the GPL corresponding-source archive from the same full commit SHA. It includes the committed project and the complete hash-verified Sparkle source, including its vendored dependencies; see [SOURCE_BUILD.md](SOURCE_BUILD.md). No working-tree files or Git history enter that archive.
+
+```sh
+python3 Tools/source_archive.py --commit FULL_SOURCE_COMMIT \
+  --output outputs/RetinaLink-0.8.1-source.tar.gz \
+  --manifest work/github-publication-0.8.1/source-manifest.json
+python3 Tools/publish_github.py plan \
+  --directory work/release-0.8.1-build61 \
+  --feeds outputs/github-updates-0.8.1 \
+  --source-archive outputs/RetinaLink-0.8.1-source.tar.gz \
+  --source-manifest work/github-publication-0.8.1/source-manifest.json \
+  --asset outputs/RetinaLink-Host-0.8.1.pkg \
+  --asset outputs/RetinaLink-Viewer-0.8.1.dmg \
+  --plan work/github-publication-0.8.1/plan.json
+python3 Tools/publish_github.py publish \
+  --plan work/github-publication-0.8.1/plan.json --gh /absolute/path/to/gh
+python3 Tools/publish_github.py verify \
+  --plan work/github-publication-0.8.1/plan.json
+```
+
+`plan` is local and records the exact source, signatures, URLs and SHA-256 digests. `publish` uses the authenticated GitHub CLI to resume or create a draft release, downloads every uploaded asset to verify its bytes, publishes the complete release, then deploys only the two signed feeds on `gh-pages`. It checks the existing Pages configuration and rejects older or conflicting feeds before publishing. Git pushes name only the intended tag or Pages branch and disable automatic following of other tags. The current source checkout and unrelated files are never checked out or rewritten for Pages.
+
+The final verification downloads the public feeds and assets without account credentials and compares their complete bytes to the plan. Exit code 3 means GitHub Pages may still be deploying; wait briefly and run `verify` again. Do not report public updates as live until verification returns 0. Never upload the local plan, source-manifest sidecar or `.release-records.json`; they are private publisher bookkeeping. The source archive contains its own portable manifest without local paths.
 
 ## Native local integration test
 
