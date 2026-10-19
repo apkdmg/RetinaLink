@@ -45,7 +45,7 @@ final class ViewerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
             guard let self = self, DeviceSettings.binding == nil else { return }
             self.showStandby("Your iMac is ready.",detail:text,phase:"ready")
         }
-        nativeSetup.onPaired = { [weak self] in self?.startNativeDiscovery(); self?.softwareUpdater.start(); self?.connect() }
+        nativeSetup.onPaired = { [weak self] in self?.startNativeDiscovery(); self?.connect() }
         if DeviceSettings.binding == nil { nativeSetup.start() } else { startNativeDiscovery() }
         DiagnosticLog.shared.record("launch","Viewer appliance ready; fullscreen and automatic reconnection; UI capture helper unused")
         uiTimer = Timer.scheduledTimer(withTimeInterval:1,repeats:true) { [weak self] _ in
@@ -58,7 +58,8 @@ final class ViewerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
                   let data = try? JSONEncoder().encode(status) else { return }
             peer.send(7,data)
         }
-        if DeviceSettings.binding != nil { softwareUpdater.start() }
+        // The Host announces relay support before starting the updater, so an
+        // offline appliance does not begin a direct internet request on launch.
         if let path = LaunchOptions.value("--export-ui") { DispatchQueue.main.asyncAfter(deadline:.now()+1) { [weak self] in if let window = self?.window { Design.export(window,path:path) } } }
     }
     func makeStandbyWindow() {
@@ -168,7 +169,7 @@ final class ViewerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
                         self.routePolicy.failed(candidate.key,now:ProcessInfo.processInfo.systemUptime)
                         peer.cancel(reason:"The selected \(candidate.label) route changed. Trying another connection…"); return
                     }
-                    let hello = Hello(version:1,bc7:true,name:Host.current().localizedName ?? "iMac",maxFramesInFlight:3,chunkedPacking:true,appVersion:LaunchOptions.version,appBuild:LaunchOptions.build,automaticUpdates:true,directConnection:self.directConnection)
+                    let hello = Hello(version:1,bc7:true,name:Host.current().localizedName ?? "iMac",maxFramesInFlight:3,chunkedPacking:true,appVersion:LaunchOptions.version,appBuild:LaunchOptions.build,automaticUpdates:true,updateRelay:UpdateRelayPolicy.version,directConnection:self.directConnection)
                     if let data = try? JSONEncoder().encode(hello) { peer.send(1,data) }
                     if let candidate = candidate { self.routePolicy.succeeded(candidate.key) }
                     self.connected = true
@@ -189,12 +190,18 @@ final class ViewerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
                         guard let self = self, self.link === peer else { return }
                         self.hostSupportsUpdates = true
                         switch command.action {
+                        case "relay": if command.relayVersion == UpdateRelayPolicy.version { self.softwareUpdater.attachRelay(peer) }
                         case "automatic": if let enabled = command.automatic { self.softwareUpdater.setAutomatic(enabled) }
                         case "check": self.softwareUpdater.check()
                         case "install": self.softwareUpdater.check(installNow:true)
                         case "test-feed": if let value = command.testBaseURL, value.isEmpty || UpdateSettings.validTestBase(value) { self.softwareUpdater.configureTestBase(value) }
                         default: break
                         }
+                    }
+                } else if type == UpdateRelayPolicy.message, binding != nil {
+                    DispatchQueue.main.async { [weak self,weak peer] in
+                        guard let self = self, self.link === peer else { return }
+                        self.softwareUpdater.relay?.receive(data)
                     }
                 } else if type == 2 {
                     guard credits.reserve() else { peer.cancel(reason:"Viewer frame queue overflow"); return }
@@ -254,6 +261,8 @@ final class ViewerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
                     if !self.receivedFrame {
                         self.receivedFrame = true; self.phase = "streaming"; self.standby.isHidden = true; self.display?.isHidden = false
                         DiagnosticLog.shared.record("state","Streaming · fullscreen appliance"); self.publishState()
+                        let fullscreen = self.window.screen.map { abs(self.window.frame.width-$0.frame.width)<2 && abs(self.window.frame.height-$0.frame.height)<2 } ?? false
+                        self.softwareUpdater.confirmDisplayReconnected(fullscreen:fullscreen)
                     }
                 }
             }
@@ -268,6 +277,7 @@ final class ViewerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
                     self.routePolicy.failed(candidate.key,now:ProcessInfo.processInfo.systemUptime)
                 }
                 self.routeProbe?.cancel(); self.routeProbe = nil; self.activeCandidate = nil
+                self.softwareUpdater.detachRelay()
                 self.link = nil; self.connected = false; self.activity = nil; self.statsTimer?.invalidate(); self.statsTimer = nil
                 self.receivedFrame = false; self.display?.removeFromSuperview(); self.display = nil
                 DiagnosticLog.shared.record("state",reason)

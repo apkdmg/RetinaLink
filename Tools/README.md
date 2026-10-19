@@ -1,5 +1,16 @@
 # Reproducing the local two-Mac tests
 
+## Host-delivered Viewer update relay (0.8.3)
+
+Both built executables accept `--update-relay-test`. The Host checks update-origin and redirect restrictions, packet bounds, legacy negotiation and version/fullscreen confirmation. Viewer adds an exact 700,000-byte transfer through a real encrypted `Link` and the token-protected loopback HTTP endpoint. These use synthetic bytes and an ephemeral test credential, without saved pairing, screen capture or installation:
+
+```sh
+'build/apps/RetinaLink Host.app/Contents/MacOS/RetinaLink' --update-relay-test
+'build/apps/RetinaLink Viewer.app/Contents/MacOS/RetinaLink' --update-relay-test
+```
+
+For actual installation testing, serve signed fixtures on Studio loopback and use the existing explicit Host test-control directory to configure the local test origin on both apps. Do not add an SSH reverse forward: the iMac must fail a direct request to that origin and obtain its feed/archive through the relay. Test opt-out, modified feed signatures, modified archive bytes, a disconnect after the first archive chunk and automatic recovery. The local-only `updates-interrupt-next-transfer` command arms that disconnect; no network packet can invoke it. Finish by removing the local feed override on both apps, restoring the automatic preference and the ordinary startup agents, and verifying new runtime versions, fullscreen streaming and preservation hashes. A protected dedicated-account baseline/observer requires owner-entered administrator authentication; normal updates run as Viewer without sudo. Keep the UI capture helper off. Hardware results and private evidence paths are in [VALIDATION.md](../VALIDATION.md).
+
 ## Host window and menu-bar lifecycle
 
 The bounded native test uses the production `HostWindowLifecycle` controller with real AppKit windows and an isolated preference suite. It exercises red close, reopening, the one-time popover, a remaining setup window, yellow minimize and observer cleanup. It never reads production pairing or starts capture, network connections or an updater. Run in a logged-in Mac GUI session:

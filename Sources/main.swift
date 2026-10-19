@@ -1,6 +1,9 @@
 import AppKit
 
 if ProcessInfo.processInfo.environment["RETINALINK_SSH_ASKPASS"] == "1" { runSSHAskpass() }
+if LaunchOptions.has("--update-relay-test") {
+    do { try runUpdateRelayTests(); exit(0) } catch { fputs("FAIL: \(error)\n",stderr); exit(1) }
+}
 
 if LaunchOptions.has("--usb-link-status") {
     // Read-only SSH diagnostic. Hardware presence alone never means that a

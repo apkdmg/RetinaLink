@@ -60,6 +60,7 @@ struct Hello: Codable {
     var appVersion: String? = nil
     var appBuild: String? = nil
     var automaticUpdates: Bool? = nil
+    var updateRelay: Int? = nil
     var directConnection: Bool? = nil
     func frameLimit(requested: Int = 3) throws -> Int {
         // Missing capability means an older Viewer with the original two credits.

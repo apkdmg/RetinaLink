@@ -310,6 +310,18 @@ final class HostApp: NSObject, NSApplicationDelegate {
     let hostUpdateNote = Design.text("",12,secondary:true)
     let viewerUpdateNote = Design.text("iMac: waiting for display connection.",12,secondary:true)
     var viewerSupportsUpdates = false
+    var viewerUpdateRelay: HostUpdateRelay?
+    var viewerSupportsRelay = false
+    var viewerUpdateState: SoftwareUpdateStatus?
+    var pendingHostUpdate = false
+    var viewerUpdateRequested: Bool {
+        get { UserDefaults.standard.bool(forKey:"RetinaLink.viewerUpdateRequested") }
+        set { UserDefaults.standard.set(newValue,forKey:"RetinaLink.viewerUpdateRequested") }
+    }
+    var viewerUpdateTarget: String? {
+        get { UserDefaults.standard.string(forKey:"RetinaLink.viewerUpdateTarget") }
+        set { UserDefaults.standard.set(newValue,forKey:"RetinaLink.viewerUpdateTarget") }
+    }
     let displayName = Design.text("A second life for your iMac.",23,.semibold)
     let displaySubtitle = Design.text("Your desktop, beautifully extended.",14,secondary:true)
     let restartNote = Design.text("",12,secondary:true)
@@ -420,6 +432,10 @@ final class HostApp: NSObject, NSApplicationDelegate {
         if let path = LaunchOptions.value("--ui-state-path") ?? Optional(NSHomeDirectory()+"/Library/Logs/RetinaLink/Host-ui.json") {
             let state: [String:Any] = ["version":LaunchOptions.version,"build":LaunchOptions.build,"pid":ProcessInfo.processInfo.processIdentifier,"trusted":reconnectEnabled,"paused":displayPaused,"listening":listener != nil,"streaming":capture != nil && helloReceived,"setupStage":nativeSetupController?.stage ?? setupController?.stage ?? "closed","fileVault":DeviceSettings.binding?.fileVault.rawValue ?? "unknown","transport":NativeConnectionSettings.enabled ? "direct-tls" : "legacy-ssh","requiresRemoteLogin":!NativeConnectionSettings.enabled,"connectionID":link?.traceID ?? "","provisionalConnections":pending.count,"connectionPath":link.map { DirectLinkPath.metadata(connection:$0.connection) } ?? [:],"networkSettingsChanged":false,"time":Date().timeIntervalSince1970]
             var report = state; report["windowPresentation"] = windowLifecycle?.metadata ?? [:]
+            report["viewerUpdateRelay"] = viewerSupportsRelay
+            report["viewerUpdateRequested"] = viewerUpdateRequested
+            if let update = viewerUpdateState, let data = try? JSONEncoder().encode(update),
+               let value = try? JSONSerialization.jsonObject(with:data) { report["viewerUpdate"] = value }
             if let data = try? JSONSerialization.data(withJSONObject:report,options:.sortedKeys) { try? data.write(to:URL(fileURLWithPath:path),options:.atomic); try? FileManager.default.setAttributes([.posixPermissions:0o600],ofItemAtPath:path) }
         }
     }
@@ -443,6 +459,7 @@ final class HostApp: NSObject, NSApplicationDelegate {
         case "reenroll": setupController?.window?.close(); setupController = nil; runAutomatedSetup()
         case "updates-check": checkUpdatesBoth(installNow:false)
         case "updates-install": checkUpdatesBoth(installNow:true)
+        case "updates-interrupt-next-transfer": viewerUpdateRelay?.interruptNextArchiveForTesting()
         case "updates-automatic": setAutomaticUpdates(item["enabled"] == "true")
         case "updates-test-feed":
             if let url = item["url"], url.isEmpty || UpdateSettings.validTestBase(url) {
@@ -474,8 +491,36 @@ final class HostApp: NSObject, NSApplicationDelegate {
         if alert.runModal() == .alertFirstButtonReturn { checkUpdatesBoth(installNow:true) }
     }
     func checkUpdatesBoth(installNow: Bool) {
+        if installNow { viewerUpdateRequested = true; viewerUpdateTarget = nil }
+        if installNow, viewerSupportsRelay, link != nil, helloReceived {
+            pendingHostUpdate = true
+            viewerUpdateNote.stringValue = "iMac: checking through this Mac…"
+            sendUpdateCommand(SoftwareUpdateCommand(action:"install")); return
+        }
+        if installNow, link == nil { viewerUpdateNote.stringValue = "iMac: update queued until the display reconnects." }
         sendUpdateCommand(SoftwareUpdateCommand(action:installNow ? "install" : "check"))
         softwareUpdater.check(installNow:installNow)
+    }
+    func releaseHostUpdate() {
+        guard pendingHostUpdate else { return }; pendingHostUpdate = false
+        softwareUpdater.check(installNow:true)
+    }
+    func observeViewerUpdate(_ update: SoftwareUpdateStatus) {
+        viewerUpdateState = update
+        if let target = update.targetBuild, Int(target) != nil { viewerUpdateTarget = target }
+        viewerUpdateNote.stringValue = "iMac: "+String(update.message.prefix(240))
+        if update.phase == "reconnected", viewerUpdateRequested,
+           let target = viewerUpdateTarget, UpdateRelayPolicy.confirmed(installed:update.build,target:target,fullscreen:update.fullscreen == true) {
+            viewerUpdateRequested = false; viewerUpdateTarget = nil
+            viewerUpdateNote.stringValue = "iMac: updated to \(update.version) (\(update.build)) · reconnected fullscreen."
+            releaseHostUpdate()
+        } else if update.phase == "up-to-date" {
+            if viewerUpdateRequested, let target = viewerUpdateTarget {
+                if (Int(update.build) ?? -1) < (Int(target) ?? Int.max) {
+                    viewerUpdateNote.stringValue = "iMac: update has not completed. Installed \(update.version) (\(update.build)); waiting for build \(target)."
+                } else { viewerUpdateNote.stringValue = "iMac: installed \(update.version) (\(update.build)) · waiting for fullscreen display…" }
+            } else { viewerUpdateRequested = false; viewerUpdateTarget = nil; releaseHostUpdate() }
+        } else if update.phase == "error" { releaseHostUpdate() }
     }
     @objc func updateViewerSoftware() {
         if NativeConnectionSettings.enabled || DeviceSettings.binding?.managementUsername != nil { checkUpdatesBoth(installNow:true); return }
@@ -690,6 +735,15 @@ final class HostApp: NSObject, NSApplicationDelegate {
                         self.parallelPacking = hello.chunkedPacking == true && !LaunchOptions.has("--serial-packing")
                         self.helloReceived = true
                         self.viewerSupportsUpdates = hello.automaticUpdates == true
+                        self.viewerSupportsRelay = hello.updateRelay == UpdateRelayPolicy.version
+                        if self.viewerSupportsRelay, self.trustedCredential != nil {
+                            let relay = HostUpdateRelay(peer:peer); self.viewerUpdateRelay = relay
+                            relay.onProgress = { [weak self,weak relay] text in
+                                guard let self = self, self.viewerUpdateRelay === relay else { return }
+                                self.viewerUpdateNote.stringValue = "iMac: "+text
+                            }
+                            self.sendUpdateCommand(SoftwareUpdateCommand(action:"relay",relayVersion:UpdateRelayPolicy.version))
+                        }
                         if hello.directConnection == true, self.trustedCredential != nil {
                             NativePendingSetup.complete()
                             let migrating = !NativeConnectionSettings.enabled
@@ -700,13 +754,21 @@ final class HostApp: NSObject, NSApplicationDelegate {
                         }
                         self.viewerUpdateNote.stringValue = "iMac: RetinaLink \(hello.appVersion ?? "earlier release") · build \(hello.appBuild ?? "unknown")"
                         self.sendUpdateCommand(SoftwareUpdateCommand(action:"automatic",automatic:UpdateSettings.automatic))
+                        if self.viewerUpdateRequested {
+                            if let target = self.viewerUpdateTarget, let build = hello.appBuild,
+                               let installed = Int(build), let expected = Int(target), installed >= expected {
+                                self.viewerUpdateNote.stringValue = "iMac: installed \(hello.appVersion ?? "") (\(build)) · reconnecting display…"
+                            } else { self.sendUpdateCommand(SoftwareUpdateCommand(action:"install")) }
+                        }
                         if self.displayPaused { peer.send(5,Data("paused".utf8)); self.status.stringValue = "Display paused · securely paired" }
                         else { self.beginCapture(peer) }
                     } catch { self.stop(message:String(describing:error)) }
                 } else if type == 7, self.helloReceived, self.trustedCredential != nil, data.count < 4096 {
                     if let status = try? JSONDecoder().decode(SoftwareUpdateStatus.self,from:data) {
-                        self.viewerUpdateNote.stringValue = "iMac: "+String(status.message.prefix(240))
+                        self.observeViewerUpdate(status)
                     }
+                } else if type == UpdateRelayPolicy.message, self.helloReceived, self.trustedCredential != nil, self.viewerSupportsRelay {
+                    self.viewerUpdateRelay?.receive(data)
                 } else if type == 9, self.helloReceived, self.forgettingNative,
                           String(data:data,encoding:.utf8) == DeviceSettings.binding?.hostID {
                     self.forgettingNative = false; self.reconnectEnabled = false
@@ -790,6 +852,7 @@ final class HostApp: NSObject, NSApplicationDelegate {
         startup?.cancel(); let startup = self.startup; self.startup = nil
         listener?.cancel(); listener = nil
         let peer = link; link = nil; peer?.cancel()
+        viewerUpdateRelay?.stop(); viewerUpdateRelay = nil; viewerSupportsRelay = false
         for p in pending.values { p.cancel() }; pending.removeAll()
         Task { @MainActor [weak self] in
             await startup?.value

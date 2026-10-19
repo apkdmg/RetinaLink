@@ -70,7 +70,9 @@ The working cable in testing negotiated **USB 2 at 480 Mbps** and produced appro
 
 ## Updating RetinaLink
 
-On Host, leave **Automatically keep both Macs up to date** enabled, or choose **Update Now…**. Both Macs need Internet access to GitHub's download services. An installed update restarts the affected app and reconnects using the existing pairing. An unavailable or rejected update leaves the current installation in place; Host reports the Viewer's update status.
+On Host, leave **Automatically keep both Macs up to date** enabled, or choose **Update Now…**. In public releases through 0.8.2, both Macs need Internet access to GitHub's download services. An installed update restarts the affected app and reconnects using the existing pairing. An unavailable or rejected update leaves the current installation in place; Host reports the Viewer's update status.
+
+Version 0.8.3 adds updates delivered through Host. With relay-capable versions on both Macs, only the main Mac needs internet; the iMac receives and verifies its update over the existing display connection. Viewer 0.8.2 and earlier need one normal installation of a relay-capable Viewer first. Keep its existing location and pairing. See [Host-delivered updates](AUTOMATIC_UPDATES.md#updates-through-the-display-connection) for implementation details and validation.
 
 **Version 0.8.0 and earlier need one manual signed replacement on both Macs before public automatic updates work.** These versions do not contain the public update addresses. Installing the latest release adds them; publishing an update alone cannot activate them in an older app.
 
