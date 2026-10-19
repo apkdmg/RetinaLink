@@ -1,0 +1,18 @@
+<?xml version="1.0" standalone="yes"?><!-- sparkle-sign-warning:
+IMPORTANT: This file was signed by Sparkle. Any modifications to this file requires re-signing this file with generate_appcast or sign_update! The signed signature will be embedded at the end of this file.
+--><rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
+    <channel>
+        <title>RetinaLink Viewer</title>
+        <item>
+            <title>0.8.1</title>
+            <pubDate>Mon, 19 Oct 2026 13:48:13 +0800</pubDate>
+            <sparkle:version>61</sparkle:version>
+            <sparkle:shortVersionString>0.8.1</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>10.15</sparkle:minimumSystemVersion>
+            <enclosure url="https://github.com/apkdmg/RetinaLink/releases/download/v0.8.1/RetinaLink-Viewer-0.8.1-61.zip" length="3474138" type="application/octet-stream" sparkle:edSignature="6XRaa+aPSjmMqx3YdGsiguSNrbdhTPnaikbprsChv4J17dChLu+EGhg5VZh0makee6oaxj3jYSQvv52FpEIPBw=="></enclosure>
+        </item>
+    </channel>
+</rss><!-- sparkle-signatures:
+edSignature: t2ObPRiDKnATACEJD6qCHcM/O14MBVc/fALVTSjtjRSLeF+Z1lLE5qETs9l6UsVwVO/ML7McbwbvTRNNCdpkBQ==
+length: 1064
+-->
