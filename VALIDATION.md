@@ -1,3 +1,17 @@
+# Dedicated-account Viewer updated — 0.7.0 build 59, 19 October 2026
+
+**The protected `retinalinkdisplay` installation is now the accepted, notarized Viewer 0.7.0 build 59, upgraded from 0.6.0 build 53.** The owner authenticated SSH and sudo directly in Terminal. The maintenance operation replaced only `/Users/retinalinkdisplay/Applications/RetinaLink Viewer.app`; it did not activate that account, stop the original account's Viewer, log out or restart the iMac. Its executable SHA-256 matches the accepted release exactly. Strict Developer ID verification, Gatekeeper (`Notarized Developer ID`) and recursive dedicated-account ownership checks pass.
+
+The installed binary passed its complete self-test suite as the non-administrator dedicated user through SSH on Big Sur, including AMD R9 M290X BC7 texture uploads at 5K, scoped automatic-Ethernet policy, receive teardown, native approval and encrypted transport. Separate native-pairing and transport tests also passed. These use disposable in-memory identities and loopback fixtures; they do not enroll the real account or access its saved Keychain credential. Ten controlled maintenance tests cover successful replacement, signature/ownership failure, running-app refusal, rollback and retention of a private backup when recovery fails.
+
+All 22 before/after preservation checks pass. FileVault remains off on the iMac and on at the Studio. The dedicated account remains non-administrator; automatic-login selection, its exact startup agent, permitted sleep/lock/setup preferences and the original account's saved binding match. Pending first-login enrollment was inspected only with `lstat`; its contents were neither read nor hashed, and its metadata is unchanged. The UI capture helper stayed off on both Macs. Temporary remote update helpers were removed and noninteractive sudo authorization is unavailable afterward. Independent fresh application status still reports the original-account Viewer trusted, fullscreen and connected, with Host streaming through direct TLS.
+
+**Still untested:** the dedicated account's first graphical sign-in, enrollment consumption, fullscreen streaming, automatic-login reboot and password-free wake. Its pending enrollment and existing `--appliance` startup agent are preserved for that first sign-in. Headless GPU and protocol tests do not establish dedicated-session presentation or stable physical 5K/60-fps output. No company network settings, FileVault setting or login policy were changed by this app update.
+
+Evidence: `work/dedicated-viewer59-update/result.json`, `before.json`, `after.json`, `device-status.json`, `gatekeeper.txt`, `self-tests.txt`, `native-tests.txt`, `transport-tests.txt` and `final.json`. Runtime apps remain the existing accepted release; only the maintenance helper and its failure tests changed in the repository.
+
+---
+
 # Automatic Ethernet verified — 0.7.0 build 59, 18 October 2026
 
 **The active Studio Host and Big Sur iMac Viewer are signed, notarized build 59, paired and streaming 5120 × 2880 over interface-scoped IPv6 Ethernet.** No IP addresses were entered. SSH was used for deployment and independent diagnostics; the UI capture helper remained off. This validates the existing company Ethernet LAN, not the unavailable CM888 direct cable.
@@ -12,7 +26,7 @@ After testing, ordinary `--autostart` Host-agent and `--appliance` Viewer launch
 
 Runtime source commit: `643b2d0`. The release's overall dirty flag is true because an unrelated pre-existing untracked review file was left untouched; compiled source, release resources and tests match the commit. Host, universal Viewer, the exact bundled Viewer ZIP and both outer DMGs have validated Apple tickets and Gatekeeper acceptance. Installers: `outputs/RetinaLink-0.7.0.dmg` and `outputs/RetinaLink-Viewer-0.7.0.dmg`; artifact hashes and submission IDs are in `outputs/RetinaLink-0.7.0-Release.json`.
 
-**Pending:** physical CM888/no-DHCP operation, real cable unplug/replug, physical panel FPS and reboot/wake testing. The active original-account Viewer is build 59. The protected dedicated-account copy remains build 53 and was not updated or logged into during this test; that account needs a compatible Viewer update to obtain this new scoped-selection feature. Its first automatic sign-in and password-free wake remain untested. FileVault and company policy are never bypassed.
+**Pending:** physical CM888/no-DHCP operation, real cable unplug/replug, physical panel FPS and reboot/wake testing. The active original-account Viewer is build 59. The protected dedicated-account copy was still build 53 during this October 18 test; its subsequent build-59 update is recorded above. Its first automatic sign-in and password-free wake remain untested. FileVault and company policy are never bypassed.
 
 Evidence: `work/direct-ethernet/installed59/result.json`, `runtime59/result.json`, `runtime59/trusted-probe.json`, `runtime59/untrusted-probe.json`, `normal59.json`, `final59.json`, `host59-self-test.log`, `imac59-self-test.log`, `credits59-imac.txt` and the final release/DMG states. See [DIRECT_ETHERNET.md](DIRECT_ETHERNET.md) for setup and implementation boundaries. Earlier sections below are historical.
 
