@@ -6,7 +6,7 @@ Turn a Retina iMac into an unattended second display. Install Viewer on the iMac
 
 Host requires Apple silicon and macOS 13+. Viewer supports Intel macOS Catalina 10.15+ and Apple silicon macOS 11+. The current test receiver is a Late-2014 5K iMac on Big Sur 11.7.8 / AMD Radeon R9 M290X. One Viewer is supported at a time.
 
-Release downloads: [Host 0.8.1 PKG](https://github.com/apkdmg/RetinaLink/releases/download/v0.8.1/RetinaLink-Host-0.8.1.pkg) for the main Mac and [Viewer 0.8.1 DMG](https://github.com/apkdmg/RetinaLink/releases/download/v0.8.1/RetinaLink-Viewer-0.8.1.dmg) for the iMac. Publication status is recorded in [VALIDATION.md](VALIDATION.md). The Viewer DMG provides drag-to-Applications installation; update an existing Viewer in its original permanent location to retain a single app copy and saved pairing.
+Release downloads: [Host 0.8.1 PKG](https://github.com/apkdmg/RetinaLink/releases/download/v0.8.1/RetinaLink-Host-0.8.1.pkg) for the main Mac and [Viewer 0.8.1 DMG](https://github.com/apkdmg/RetinaLink/releases/download/v0.8.1/RetinaLink-Viewer-0.8.1.dmg) for the iMac. Both are Developer ID signed, Apple-notarized and stapled. The [public release](https://github.com/apkdmg/RetinaLink/releases/tag/v0.8.1) also includes signed update archives, corresponding source and checksums. Public downloads and feed signatures passed verification; see [VALIDATION.md](VALIDATION.md). The Viewer DMG provides drag-to-Applications installation; update an existing Viewer in its original permanent location to retain a single app copy and saved pairing.
 
 ## Set up from Host
 

@@ -4,7 +4,7 @@ Host owns the everyday controls: **Automatically keep both Macs up to date** and
 
 Automatic checking and installation default to enabled, with a daily check interval. A verified update restarts the affected app, which reconnects using the existing pairing. Relaunched apps return to their existing startup agents so later crashes still recover. Update checks do not enroll, rotate the stream/tunnel keys, edit SSH authorization, change FileVault, enable automatic login, reset Screen Recording, or start the UI capture helper.
 
-The installed 0.3.x releases need one normal signed software replacement to acquire the updater. This bootstrap uses the existing **Update Display Software…** path and preserves pairing. Once an updater-enabled production release is installed, later signed feed updates do not require another manual installation. macOS can still require first-run or periodic permission reauthorization.
+Earlier 0.3.x releases needed one normal signed software replacement to acquire the updater. That bootstrap used the existing **Update Display Software…** path and preserved pairing. Once an updater-enabled production release has a configured public feed, later compatible signed feed updates do not require another manual installation. macOS can still require first-run or periodic permission reauthorization.
 
 ## Signing and compatibility
 
@@ -21,7 +21,7 @@ The public repository is configured as `apkdmg/RetinaLink`. Version 0.8.1 build 
 - Host: `https://apkdmg.github.io/RetinaLink/updates/host/appcast.xml`
 - Viewer: `https://apkdmg.github.io/RetinaLink/updates/viewer/appcast.xml`
 
-GitHub Pages serves only the signed XML and the `.nojekyll` marker. Versioned GitHub Releases serve the notarized role-specific ZIP archives, Host PKG, Viewer DMG and matching corresponding source archive. Both Macs need outbound HTTPS access to these GitHub domains. Publishing status and external byte/signature checks are recorded in [VALIDATION.md](VALIDATION.md).
+GitHub Pages serves only the signed XML and the `.nojekyll` marker. Versioned GitHub Releases serve the notarized role-specific ZIP archives, Host PKG, Viewer DMG and matching corresponding source archive. Release v0.8.1 is public: anonymous downloads of its six assets and both feeds match their planned hashes, and both downloaded feeds pass Sparkle signature verification. Both Macs need outbound HTTPS access to these GitHub domains. The checks and installed-version boundary are recorded in [VALIDATION.md](VALIDATION.md).
 
 **Releases through 0.8.0 have no public feed address.** They require one normal signed replacement on both Macs to acquire this configuration. Publishing a feed cannot activate those old binaries remotely. Keep their existing application paths, bundle identifiers, Developer ID team and pairing; do not enroll them again. After the bootstrap, compatible signed updates use the public feeds.
 
