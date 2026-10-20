@@ -28,6 +28,16 @@ An unpaired Viewer is discoverable for ten minutes. If setup times out, use the 
 
 If discovery is blocked, Host also accepts a local hostname or IP address. On a managed network, ask your administrator whether local device discovery and traffic are permitted. RetinaLink leaves company restrictions and network settings unchanged. See [connection and pairing details](NATIVE_CONNECTION.md).
 
+## Changing the iMac account
+
+Pairing belongs to the macOS account that runs Viewer, even if the app itself is installed in `/Applications` for everyone. Another account has separate preferences and a separate login Keychain; it needs its own approval. Signing out of account A and opening Viewer in account B does not transfer account A’s pairing.
+
+**Recovery controls in the next development build (not in published 0.8.3):** In Host, choose **Add Display → Set Up Another Account…**, open Viewer in account B, select the iMac and approve the matching number on both Macs. Host keeps the old pairing until both approve, then replaces it with a new credential for account B. Cancelling before that point keeps account A’s pairing. Changing accounts does not change FileVault or automatic login. For an account managed by Dedicated Mode, turn that mode off through Dedicated Display Setup before changing accounts.
+
+If the original Viewer is unavailable, **Forget Display → Forget on This Mac** removes Host’s local trust without needing account A to sign in. It leaves the iMac’s original pairing and startup in place. To reuse that old account, use Viewer’s **Display → Reset Pairing for This Account…** before pairing again. A local reset does not alter other accounts, automatic login or FileVault. When both peers are connected, **Forget on Both Macs** can also remove Viewer’s pairing and startup normally.
+
+**Workaround for published 0.8.3:** Sign back into account A, open Viewer and let it reconnect. Choose **Forget Display** on Host while connected. Quit and reopen Host to discard an already-open disabled setup window, then sign into account B on the iMac, open Viewer and pair it using **Add Display**. Keep Viewer installed in a location account B can open.
+
 ## Everyday use
 
 Keep Host running on your main Mac. In Host 0.8.2 and later, clicking the red close button hides its window and running Dock icon while the display stays connected. The first close shows a brief hint pointing to RetinaLink in the menu bar. Choose **Open RetinaLink** there to restore the window and Dock icon. Clicking the yellow minimize button keeps the Dock icon, as usual. A Dock shortcut you have manually pinned remains under macOS's control.
@@ -40,7 +50,7 @@ Host provides these controls:
 - **Identify** helps you recognize the connected display.
 - **Disconnect** pauses the connection without removing pairing; **Connect** resumes it.
 - **Connection Details** shows connection status, display profiles and **Copy Diagnostics**.
-- **Forget Display…** deliberately removes pairing and Viewer automatic startup. The iMac must be reachable to finish. Use it when removing a display, rather than for an ordinary update or temporary connection problem.
+- **Forget Display…** deliberately removes pairing. In published 0.8.3, the original Viewer must be connected to finish, and its automatic startup is removed too. The [account-recovery section](#changing-the-imac-account) describes the upcoming offline recovery controls.
 
 If the main Mac or connection becomes unavailable, Viewer keeps the iMac covered with a quiet fullscreen standby screen. It waits for the trusted Mac or network and retries automatically; it is not waiting for a Connect click. When the connection returns, the extended desktop replaces standby.
 

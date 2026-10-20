@@ -2,8 +2,13 @@ import AppKit
 import Network
 
 enum NativeConnectionSettings {
+    static let resetKey = "nativePairingReset.v1"
+    static var requiresSetup:Bool { DeviceSettings.defaults.bool(forKey:resetKey) }
     static var enabled:Bool { DeviceSettings.defaults.bool(forKey:"nativeConnectionEnabled.v1") }
-    static func enable() { DeviceSettings.defaults.set(true,forKey:"nativeConnectionEnabled.v1"); DeviceSettings.defaults.synchronize() }
+    static func enable() {
+        DeviceSettings.defaults.removeObject(forKey:resetKey)
+        DeviceSettings.defaults.set(true,forKey:"nativeConnectionEnabled.v1"); DeviceSettings.defaults.synchronize()
+    }
     static var hostAddress:String? {
         let value = LaunchOptions.value("--native-host-address") ?? DeviceSettings.defaults.string(forKey:"nativeHostAddress.v1")
         return value.flatMap { DeviceBinding.validAddress($0) ? $0 : nil }
@@ -25,6 +30,59 @@ enum NativePendingSetup {
     static func begin(viewerID:String) { DeviceSettings.defaults.set(viewerID,forKey:key); DeviceSettings.defaults.synchronize() }
     static func complete() { DeviceSettings.defaults.removeObject(forKey:key); DeviceSettings.defaults.synchronize() }
 }
+
+// Local recovery never needs the other account to be signed in. Deleting the
+// credential must succeed before clearing metadata; otherwise keep the profile.
+// Per-account startup, login, FileVault and network settings are not changed.
+enum NativeLocalPairing {
+    static func forget(removeCredential:() throws -> Void = { try DeviceVault.removeChecked(DeviceVault.credentialAccount) }) throws {
+        try removeCredential()
+        for key in [DeviceSettings.bindingKey,"nativeConnectionEnabled.v1","nativeHostAddress.v1",
+                    NativePendingSetup.key,"viewerShortCode","viewerAddress",
+                    "RetinaLink.viewerUpdateRequested","RetinaLink.viewerUpdateTarget","RetinaLink.resumeViewerUpdate"] {
+            DeviceSettings.defaults.removeObject(forKey:key)
+        }
+        // Host's login item may remain enabled. A reset must never make that
+        // background launch fall back to an old saved legacy pairing code.
+        DeviceSettings.defaults.set(true,forKey:NativeConnectionSettings.resetKey)
+        DeviceSettings.defaults.synchronize()
+    }
+}
+
+#if HOST
+// Pure recovery policy. A replacement is permitted only for the exact profile
+// the owner selected locally. Pending enrollment remains tied to its peer ID.
+enum NativeHostEnrollment {
+    static func prepare(peer:NativePeer, identity:NativePeer, address:String,
+                        existing:DeviceBinding?, pendingViewerID:String?, credential:String?,
+                        replacing:DeviceBinding?, viewerStartup:Bool, hostStartup:Bool) throws -> NativeEnrollment {
+        try peer.validate(role:"viewer"); try identity.validate(role:"host")
+        if let existing = existing {
+            if let pending = pendingViewerID {
+                guard pending == peer.id, existing.hostID == identity.id,
+                      existing.viewerName == peer.name, existing.username == peer.username,
+                      let credential = credential, credential.count == 32,
+                      credential.allSatisfy({"0123456789ABCDEF".contains($0)}) else {
+                    throw LinkError.invalid("Finish the interrupted setup with the same iMac account, or forget this display on Host before starting again.")
+                }
+                return NativeEnrollment(binding:existing,credential:credential)
+            }
+            guard replacing == existing else { throw LinkError.invalid("Choose Set Up Another Account before replacing the saved display.") }
+            guard !(existing.dedicatedDisplay && existing.managementUsername != nil) else {
+                throw LinkError.invalid("Turn off Dedicated Mode before changing its display account. Automatic login still uses the original account.")
+            }
+        } else if replacing != nil || pendingViewerID != nil {
+            throw LinkError.invalid("The saved pairing changed. Close setup and try again.")
+        }
+        let binding = DeviceBinding(hostID:identity.id,hostName:identity.name,viewerName:peer.name,
+            address:address,username:peer.username,dedicatedDisplay:false,
+            viewerStartup:viewerStartup,hostStartup:hostStartup,fileVault:peer.fileVault,
+            automaticLoginConfigured:false,enrolledAt:Date())
+        try binding.validate()
+        return NativeEnrollment(binding:binding,credential:randomPairingCode().replacingOccurrences(of:"-",with:""))
+    }
+}
+#endif
 
 // All delegate callbacks are on the main run loop. Names/addresses are hints;
 // only the TLS credential or the two-screen approval can authenticate a peer.

@@ -421,7 +421,7 @@ final class HostApp: NSObject, NSApplicationDelegate {
             }
             if waitingForPermission { button?.title = "Retry Capture"; button?.action = #selector(retryCapture) }
             pairing.stringValue = "Device pairing is managed automatically."
-            pairingNote.stringValue = "Credentials are stored in Keychain. Your iMac stays paired across app restarts."
+            pairingNote.stringValue = "Paired with iMac account “\(binding.username)”. To change accounts, choose Display Setup → Set Up Another Account."
             copyCodeButton?.isHidden = true; newCodeButton?.isHidden = true; pairingMode.isHidden = true
         } else {
             restartNote.stringValue = "Setup checks FileVault first and explains any restart limits. No disk changes or additional macOS installation."
@@ -456,6 +456,7 @@ final class HostApp: NSObject, NSApplicationDelegate {
         case "snapshot": Design.export(window,path:folder.appendingPathComponent("host-ui.png").path)
         case "snapshot-setup": if let window = setupController?.window { Design.export(window,path:folder.appendingPathComponent("setup-ui.png").path) }
         case "forget": forgetConfirmed()
+        case "forget-local": forgetOnThisMac()
         case "reenroll": setupController?.window?.close(); setupController = nil; runAutomatedSetup()
         case "updates-check": checkUpdatesBoth(installNow:false)
         case "updates-install": checkUpdatesBoth(installNow:true)
@@ -544,9 +545,39 @@ final class HostApp: NSObject, NSApplicationDelegate {
     @objc func forgetDisplay() {
         guard let binding = DeviceSettings.binding else { return }
         let alert = NSAlert(); alert.alertStyle = .warning; alert.messageText = "Forget \(binding.viewerName)?"
-        alert.informativeText = "This disconnects the display and removes saved pairing and automatic Viewer startup. The iMac must be reachable to finish. Its FileVault, files and login settings stay unchanged."
-        alert.addButton(withTitle:"Forget Display"); alert.addButton(withTitle:"Cancel")
-        if alert.runModal() == .alertFirstButtonReturn { forgetConfirmed() }
+        let dedicated = binding.managementUsername != nil && binding.dedicatedDisplay
+        let online = link != nil && helloReceived
+        if dedicated {
+            alert.informativeText = "Dedicated Mode still controls automatic login to “\(binding.username)”. Use Dedicated Display Setup to restore ordinary login first. Forgetting only on this Mac removes Host’s trust but leaves the iMac’s account, startup and login settings as they are."
+            alert.addButton(withTitle:"Dedicated Display Setup…")
+        } else if NativeConnectionSettings.enabled && !online {
+            alert.informativeText = "The original Viewer is unavailable. Forgetting on this Mac removes its saved pairing and stops this connection. The iMac’s saved pairing and startup remain in its original account; reset pairing there if you use it again. FileVault, accounts and network settings stay unchanged."
+            alert.addButton(withTitle:"Forget on This Mac")
+        } else {
+            alert.informativeText = "Forget on both Macs removes pairing and Viewer startup through the current connection. You can also remove only this Mac’s pairing if the original Viewer is unavailable. FileVault, accounts and login settings stay unchanged."
+            alert.addButton(withTitle:"Forget on Both Macs")
+        }
+        alert.addButton(withTitle:"Cancel")
+        if dedicated || online || !NativeConnectionSettings.enabled { alert.addButton(withTitle:"Forget on This Mac Only") }
+        let response = alert.runModal()
+        if response == .alertThirdButtonReturn { forgetOnThisMac() }
+        else if response == .alertFirstButtonReturn {
+            if NativeConnectionSettings.enabled && !online && !dedicated { forgetOnThisMac() }
+            else { forgetConfirmed() }
+        }
+    }
+    func forgetOnThisMac(viewerConfirmed:Bool = false) {
+        do { try NativeLocalPairing.forget() }
+        catch { connectionNote.stringValue = String(describing:error); return }
+        nativeSetupController?.cancel(); nativeSetupController = nil
+        reconnectEnabled = false; forgettingNative = false; trustedCredential = nil
+        viewerUpdateState = nil; viewerUpdateTarget = nil; viewerUpdateRequested = false; pendingHostUpdate = false
+        displayPaused = false; UserDefaults.standard.set(false,forKey:"displayPaused")
+        tunnel?.stop(disconnect:true); tunnel = nil
+        stop(message:"Display forgotten. Choose Add Display to set up the iMac account you want to use.",reconnect:false)
+        displayName.stringValue = "A second life for your iMac."
+        connectionNote.stringValue = viewerConfirmed ? "Pairing removed on both Macs." : "Forgotten on this Mac. The iMac’s original account and startup settings were left unchanged."
+        refreshHome()
     }
     func forgetConfirmed() {
         guard let binding = DeviceSettings.binding else { return }
@@ -555,12 +586,12 @@ final class HostApp: NSObject, NSApplicationDelegate {
             dedicatedGuide(); return
         }
         if NativeConnectionSettings.enabled {
-            guard let peer = link, helloReceived else { connectionNote.stringValue = "Reconnect your iMac before forgetting it. Your pairing is kept."; return }
+            guard let peer = link, helloReceived else { forgetOnThisMac(); return }
             forgettingNative = true; peer.send(8,Data(binding.hostID.utf8))
             connectionNote.stringValue = "Removing pairing through your encrypted app connection…"
             DispatchQueue.main.asyncAfter(deadline:.now()+10) { [weak self] in
                 guard let self = self, self.forgettingNative else { return }
-                self.forgettingNative = false; self.connectionNote.stringValue = "Could not confirm removal. Your Host pairing is kept. Reconnect Viewer and try again."
+                self.forgettingNative = false; self.connectionNote.stringValue = "Viewer did not confirm removal. Choose Forget Display → Forget on This Mac Only to remove the local pairing."
             }
             return
         }
@@ -675,6 +706,10 @@ final class HostApp: NSObject, NSApplicationDelegate {
     }
     func start() {
         guard !stopping, listener == nil else { return }
+        guard !NativeConnectionSettings.requiresSetup else {
+            status.stringValue = "Display forgotten. Choose Add Display to approve a new pairing."
+            refreshHome(); return
+        }
         guard DeviceSettings.binding == nil || trustedCredential != nil else {
             status.stringValue = "Device trust is unavailable. Finish Display Setup to restore this connection."
             // A locked/missing Keychain entry must never fall back to a weak
@@ -684,8 +719,8 @@ final class HostApp: NSObject, NSApplicationDelegate {
         do {
             let listener = try NWListener(using:networkParameters(code),on:NWEndpoint.Port(rawValue:defaultPort)!)
             self.listener = listener; listener.service = NWListener.Service(name:Host.current().localizedName ?? "RetinaLink Host",type:serviceType,domain:nil,txtRecord:NativeConnectionSettings.record(hostID:DeviceSettings.hostID))
-            listener.stateUpdateHandler = { [weak self] state in
-                guard let self = self else { return }
+            listener.stateUpdateHandler = { [weak self,weak listener] state in
+                guard let self = self, let listener = listener, self.listener === listener else { return }
                 switch state {
                 case .ready: self.status.stringValue = "Waiting for Viewer · \(self.connectionLabel)"; self.addresses.stringValue = localAddresses(); DiagnosticLog.shared.record("state", "Waiting for Viewer")
                 case .failed(let error): self.stop(message:"Could not listen: \(error)")
@@ -693,7 +728,12 @@ final class HostApp: NSObject, NSApplicationDelegate {
                 default: break
                 }
             }
-            listener.newConnectionHandler = { [weak self] connection in self?.accept(connection) }
+            listener.newConnectionHandler = { [weak self,weak listener] connection in
+                // Account changes rotate the credential. Never admit a late
+                // connection authenticated by the previous listener's key.
+                guard let self = self, let listener = listener, self.listener === listener else { connection.cancel(); return }
+                self.accept(connection)
+            }
             listener.start(queue:.main); button.title = "Stop hosting"; profiles.isEnabled = false
             pairingMode.isEnabled = false; newCodeButton.isEnabled = false
         } catch { status.stringValue = String(describing:error) }
@@ -771,13 +811,7 @@ final class HostApp: NSObject, NSApplicationDelegate {
                     self.viewerUpdateRelay?.receive(data)
                 } else if type == 9, self.helloReceived, self.forgettingNative,
                           String(data:data,encoding:.utf8) == DeviceSettings.binding?.hostID {
-                    self.forgettingNative = false; self.reconnectEnabled = false
-                    DeviceVault.remove(DeviceVault.credentialAccount); DeviceVault.remove(TunnelIdentity.account)
-                    UserDefaults.standard.removeObject(forKey:DeviceSettings.bindingKey)
-                    UserDefaults.standard.removeObject(forKey:"nativeConnectionEnabled.v1"); UserDefaults.standard.synchronize()
-                    try? FileManager.default.removeItem(at:StartupAgent.path(role:"Host"))
-                    self.trustedCredential = nil
-                    self.stop(message:"Display forgotten. Install/open Viewer to approve a new Host.",reconnect:false)
+                    self.forgetOnThisMac(viewerConfirmed:true)
                 } else if type == 3, self.helloReceived { self.capture?.acknowledge(data) }
                 else { peer.cancel() }
             }

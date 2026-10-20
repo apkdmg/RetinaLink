@@ -17,9 +17,12 @@ final class NativeHostSetup:NSObject,NSWindowDelegate {
     var targetPort = nativePairingPort
     private(set) var stage = "choose", verificationCode:String?
     var onPrepared:((DeviceBinding)->Void)?, onCompleted:((DeviceBinding)->Void)?
-    private var prepared:DeviceBinding?
+    private var prepared:DeviceBinding?, replacingBinding:DeviceBinding?
     func show() {
-        if let window = window { window.makeKeyAndOrderFront(nil); return }
+        if let window = window {
+            if ["choose","existing","complete"].contains(stage) { configureStart() }
+            discovery.start(type:nativePairingType); window.makeKeyAndOrderFront(nil); return
+        }
         address.placeholderString = "Old-iMac.local or iMac IP address"
         discovered.addItem(withTitle:"Choose your iMac…"); discovered.target = self; discovered.action = #selector(selectDisplay)
         discovered.widthAnchor.constraint(equalToConstant:450).isActive = true
@@ -46,13 +49,35 @@ final class NativeHostSetup:NSObject,NSWindowDelegate {
             self.discovered.addItems(withTitles:items.map(\.name))
         }
         discovery.start(type:nativePairingType)
-        if let binding = DeviceSettings.binding, NativePendingSetup.viewerID != nil {
+        configureStart()
+    }
+    private func configureStart() {
+        replacingBinding = nil; prepared = nil; verificationCode = nil; codeCard?.isHidden = true
+        stage = "choose"; continueButton.title = "Continue"; continueButton.isEnabled = true
+        heading.stringValue = "Your iMac. Ready for a new role."
+        detail.stringValue = "Open Viewer in the iMac account you want to use. Pairing belongs to that account."
+        if let binding = DeviceSettings.binding {
             address.stringValue = binding.address
-            result.stringValue = "Finish your interrupted setup with the same iMac. Your approved credential is kept. If Viewer already paired, open it to reconnect automatically."
-        } else if DeviceSettings.binding != nil {
-            result.stringValue = "Your existing pairing is kept. Update and open Viewer to reconnect directly without Remote Login."
-            continueButton.isEnabled = false
+            if NativePendingSetup.viewerID != nil {
+                result.stringValue = "Finish the interrupted setup in iMac account “\(binding.username)”. Your approved credential is kept."
+            } else {
+                stage = "existing"; continueButton.title = "Set Up Another Account…"
+                heading.stringValue = "Use another iMac account?"
+                result.stringValue = "Currently paired with \(binding.viewerName) in account “\(binding.username)”. A different account needs its own approval. You can also forget an unavailable display from Host."
+            }
+        } else { result.stringValue = "Pair once in the account where Viewer will run. No Remote Login is needed." }
+    }
+    // Called only after local confirmation (or the UUID-isolated test harness).
+    func beginAccountChange() {
+        guard let binding = DeviceSettings.binding, NativePendingSetup.viewerID == nil else { configureStart(); return }
+        guard !(binding.dedicatedDisplay && binding.managementUsername != nil) else {
+            result.stringValue = "Turn off Dedicated Mode in Dedicated Display Setup before changing accounts. Automatic login still uses “\(binding.username)”."; return
         }
+        replacingBinding = binding; stage = "choose"
+        heading.stringValue = "Open Viewer in the new account."
+        detail.stringValue = "Select your iMac, then approve the matching number on both Macs."
+        result.stringValue = "The pairing with account “\(binding.username)” is kept until both Macs approve. The new pairing will replace it; login and FileVault stay unchanged."
+        continueButton.title = "Continue"; continueButton.isEnabled = true
     }
     @objc func selectDisplay() {
         let index = discovered.indexOfSelectedItem-1
@@ -60,12 +85,19 @@ final class NativeHostSetup:NSObject,NSWindowDelegate {
     }
     @objc func advance() {
         if stage == "complete" { window?.close(); return }
+        if stage == "existing" {
+            let alert = NSAlert(); alert.messageText = "Set up another iMac account?"
+            alert.informativeText = "Each macOS account keeps its own pairing. Open Viewer in the account you want to use, then approve setup on both Macs. Your current pairing is kept until both approve; the new pairing then replaces it. FileVault and login settings stay unchanged."
+            alert.addButton(withTitle:"Set Up Another Account"); alert.addButton(withTitle:"Cancel")
+            if alert.runModal() == .alertFirstButtonReturn { beginAccountChange() }
+            return
+        }
         if stage == "verify" {
             session?.approve(); stage = "approving"; continueButton.isEnabled = false
             result.stringValue = "Approve this Mac on the iMac too. Both screens must show the same number."
             return
         }
-        guard stage == "choose", DeviceSettings.binding == nil || NativePendingSetup.viewerID != nil else { return }
+        guard stage == "choose", DeviceSettings.binding == nil || NativePendingSetup.viewerID != nil || replacingBinding != nil else { return }
         let target = address.stringValue.trimmingCharacters(in:.whitespacesAndNewlines)
         guard DeviceBinding.validAddress(target) else { result.stringValue = "Select your iMac or enter its local address."; return }
         let tcp = NWProtocolTCP.Options(); tcp.noDelay = true; tcp.connectionTimeout = 8
@@ -83,32 +115,33 @@ final class NativeHostSetup:NSObject,NSWindowDelegate {
             self.verificationCode = code; self.codeLabel.stringValue = code; self.codeCard?.isHidden = false
             self.vaultNotice.stringValue = peer.fileVault.setupMessage
             self.heading.stringValue = "Is this \(peer.name)?"
-            self.detail.stringValue = "Check the number on your iMac. Continue only if it matches, then choose Allow This Mac on the iMac."
+            self.detail.stringValue = "Viewer is running in account “\(peer.username)”. Check the number on that iMac, then approve on both Macs."
             self.stage = "verify"; self.continueButton.title = "Numbers Match — Pair"; self.continueButton.isEnabled = true
             self.result.stringValue = "This number verifies the two Macs. It is not an account password."
         }
         session.onBothApproved = { [weak self,weak session] in
             guard let self = self, let session = session, let peer = session.peer else { return }
             do {
-                let binding:DeviceBinding, credential:String
-                if let existing = DeviceSettings.binding {
-                    guard NativePendingSetup.viewerID == peer.id, existing.hostID == session.exchange.identity.id,
-                          existing.viewerName == peer.name, existing.username == peer.username,
-                          let saved = try DeviceVault.credential() else { throw LinkError.invalid("Finish setup with the same iMac. An existing pairing cannot be replaced.") }
-                    binding = existing; credential = saved
-                } else {
-                    binding = DeviceBinding(hostID:DeviceSettings.hostID,hostName:session.exchange.identity.name,
-                    viewerName:peer.name,address:target,username:peer.username,dedicatedDisplay:false,
-                    viewerStartup:self.viewerStartup.state == .on,hostStartup:self.hostStartup.state == .on,
-                    fileVault:peer.fileVault,automaticLoginConfigured:false,enrolledAt:Date())
-                    credential = randomPairingCode().replacingOccurrences(of:"-",with:"")
-                // Persist before transmitting: a lost final ACK does not lose the
-                // Host's half of an already approved Viewer pairing.
-                    try DeviceVault.write(Data(credential.utf8),account:DeviceVault.credentialAccount)
+                let previous = DeviceSettings.binding
+                let savedCredential = try DeviceVault.credential()
+                let request = try NativeHostEnrollment.prepare(peer:peer,identity:session.exchange.identity,address:target,
+                    existing:previous,pendingViewerID:NativePendingSetup.viewerID,credential:savedCredential,
+                    replacing:self.replacingBinding,viewerStartup:self.viewerStartup.state == .on,hostStartup:self.hostStartup.state == .on)
+                let binding = request.binding, credential = request.credential
+                if NativePendingSetup.viewerID == nil {
+                    // Both local approvals precede any trust change. Persist before
+                    // transmitting so a lost final ACK remains resumable.
                     if binding.hostStartup && DeviceSettings.nativeTestScope == nil {
                         try StartupAgent.install(executable:Bundle.main.executablePath!,role:"Host",arguments:["--autostart"])
                     }
-                    NativePendingSetup.begin(viewerID:peer.id); try DeviceSettings.save(binding)
+                    try DeviceVault.write(Data(credential.utf8),account:DeviceVault.credentialAccount)
+                    do { try DeviceSettings.save(binding) }
+                    catch {
+                        if let old = savedCredential { try? DeviceVault.write(Data(old.utf8),account:DeviceVault.credentialAccount) }
+                        else { DeviceVault.remove(DeviceVault.credentialAccount) }
+                        throw error
+                    }
+                    NativePendingSetup.begin(viewerID:peer.id)
                 }
                 NativeConnectionSettings.enable()
                 self.prepared = binding; self.stage = "enrolling"; self.continueButton.isEnabled = false
@@ -156,7 +189,7 @@ final class NativeHostSetup:NSObject,NSWindowDelegate {
         do { try Data(contentsOf:archive).write(to:url,options:.atomic); result.stringValue = "Viewer installer saved. Copy it to your iMac and open Viewer there once." }
         catch { result.stringValue = "The Viewer installer could not be saved. Choose another location." }
     }
-    @objc func cancel() { session?.cancel(); window?.close(); discovery.stop() }
+    @objc func cancel() { session?.cancel(); window?.close(); discovery.stop(); replacingBinding = nil }
     func windowShouldClose(_ sender:NSWindow)->Bool { session?.cancel(); discovery.stop(); return true }
 }
 #endif

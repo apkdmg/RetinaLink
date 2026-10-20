@@ -25,6 +25,10 @@ if LaunchOptions.has("--usb-link-status") {
     catch { fputs("USB interface observations could not be encoded.\n",stderr); exit(1) }
 }
 
+if LaunchOptions.has("--pairing-recovery-test") {
+    guard DeviceSettings.nativeTestScope != nil else { fputs("An isolated native test scope is required.\n",stderr); exit(2) }
+    do { try runPairingRecoveryTests(); exit(0) } catch { fputs("FAIL: \(error)\n",stderr); exit(1) }
+}
 if LaunchOptions.has("--native-test-harness") {
     guard DeviceSettings.nativeTestScope != nil else { exit(2) }
     let app = NSApplication.shared; app.setActivationPolicy(.regular)

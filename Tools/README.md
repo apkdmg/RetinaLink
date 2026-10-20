@@ -1,5 +1,20 @@
 # Reproducing the local two-Mac tests
 
+## Account-change and offline-forget regression tests
+
+Build the development apps, then run the actual AppKit setup flow with disposable Host and Viewer preferences and Keychain namespaces:
+
+```sh
+python3 Tools/test_account_recovery.py --apps /absolute/build/apps \
+  --output /absolute/new-test-output
+```
+
+The four cases cover cancellation preserving the old account’s trust, replacement only after both local approvals, retry after an enrollment persistence failure, and offline local forget reopening usable setup controls. Separate Viewer namespaces model another account’s empty state. This does not create real OS accounts or test a logout/login. Production pairing, startup, FileVault and network settings are outside the test scope, and the UI capture helper must stay off.
+
+Use `--viewer-app /absolute/older/RetinaLink\ Viewer.app` with a disposable copy to repeat the four cases with an older compatible Viewer. The published build-67 Viewer passes this check. Keep the installed production app outside the test paths.
+
+Both executables also expose `--pairing-recovery-test`, but only with `--native-test-harness --native-test-scope UUID`. Missing or malformed isolation exits before Keychain access. Use a fresh UUID for each run. These check a failed credential deletion preserving metadata, idempotent offline reset, stable identity, update preferences and the persistent guard against legacy hosting after reset. Host additionally checks the exact-profile replacement consent, new credentials, dedicated-mode guard and interrupted-peer binding. `--native-pairing-test` separately exercises the real TCP two-approval and cryptographic boundary without saved pairing.
+
 ## Host-delivered Viewer update relay (0.8.3)
 
 Both built executables accept `--update-relay-test`. The Host checks update-origin and redirect restrictions, packet bounds, legacy negotiation and version/fullscreen confirmation. Viewer adds an exact 700,000-byte transfer through a real encrypted `Link` and the token-protected loopback HTTP endpoint. These use synthetic bytes and an ephemeral test credential, without saved pairing, screen capture or installation:

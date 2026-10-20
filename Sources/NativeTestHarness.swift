@@ -18,11 +18,18 @@ final class NativeTestHarness:NSObject,NSApplicationDelegate {
         catch { exit(2) }
         installMenu()
         #if HOST
+        if LaunchOptions.has("--native-test-existing-binding"), DeviceSettings.binding == nil {
+            let binding = DeviceBinding(hostID:DeviceSettings.hostID,hostName:NativePeer.current(role:"host").name,
+                viewerName:"Previously Paired iMac",address:"127.0.0.1",username:"account_a",dedicatedDisplay:false,
+                viewerStartup:false,hostStartup:false,fileVault:.on,automaticLoginConfigured:false,enrolledAt:Date())
+            do { try DeviceVault.write(Data(String(repeating:"A",count:32).utf8),account:DeviceVault.credentialAccount); try DeviceSettings.save(binding); NativeConnectionSettings.enable() }
+            catch { exit(2) }
+        }
         setup.show(); setup.viewerStartup.state = .off; setup.hostStartup.state = .off
         if let address = LaunchOptions.value("--native-test-address") {
             setup.address.stringValue = address
             setup.targetPort = UInt16(LaunchOptions.value("--native-pair-port") ?? "") ?? nativePairingPort
-            setup.advance()
+            if setup.stage != "existing" { setup.advance() }
         }
         #else
         setup.start()
@@ -47,6 +54,10 @@ final class NativeTestHarness:NSObject,NSApplicationDelegate {
         if let binding = DeviceSettings.binding, let data = try? nativeJSON(binding) {
             state["bindingSHA256"] = Data(SHA256.hash(data:data)).base64EncodedString()
         }
+        #if HOST
+        state["continueEnabled"] = setup.continueButton.isEnabled
+        #endif
+        state["boundUsername"] = DeviceSettings.binding?.username ?? ""
         // Fingerprint only the disposable TEST credential, never real trust.
         if let credential = try? DeviceVault.credential() {
             state["testCredentialSHA256"] = Data(SHA256.hash(data:Data(credential.utf8))).base64EncodedString()
@@ -71,6 +82,21 @@ final class NativeTestHarness:NSObject,NSApplicationDelegate {
             setup.session?.cancel()
             #else
             setup.deny()
+            #endif
+        case "begin-account-change":
+            #if HOST
+            setup.beginAccountChange()
+            #endif
+        case "connect":
+            #if HOST
+            setup.advance()
+            #endif
+        case "forget-local":
+            do { try NativeLocalPairing.forget() } catch { return }
+            #if HOST
+            setup.cancel(); setup.show()
+            #else
+            setup.stop(); setup.start()
             #endif
         case "retry":
             #if HOST

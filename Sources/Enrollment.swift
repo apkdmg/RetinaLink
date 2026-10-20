@@ -125,6 +125,15 @@ enum DeviceVault {
         accessLock.lock(); defer { accessLock.unlock() }
         SecItemDelete([kSecClass as String:kSecClassGenericPassword,kSecAttrService as String:service,kSecAttrAccount as String:account] as CFDictionary)
     }
+    static func removeChecked(_ account: String) throws {
+        try silently {
+            let status = SecItemDelete([kSecClass as String:kSecClassGenericPassword,
+                kSecAttrService as String:service,kSecAttrAccount as String:account] as CFDictionary)
+            guard status == errSecSuccess || status == errSecItemNotFound else {
+                throw LinkError.invalid("Pairing could not be removed from this account’s Keychain (\(status)). Unlock the login Keychain and try again.")
+            }
+        }
+    }
     static var credentialAccount: String {
         #if HOST
         return "host-stream"
@@ -288,7 +297,7 @@ enum ViewerEnrollment {
             try Data((kept.joined(separator:"\n")+"\n").utf8).write(to:authorized,options:.atomic)
             try FileManager.default.setAttributes([.posixPermissions:0o600],ofItemAtPath:authorized.path)
         }
-        DeviceVault.remove(DeviceVault.credentialAccount)
+        try DeviceVault.removeChecked(DeviceVault.credentialAccount)
         UserDefaults.standard.removeObject(forKey:DeviceSettings.bindingKey)
         UserDefaults.standard.removeObject(forKey:"viewerShortCode"); UserDefaults.standard.removeObject(forKey:"viewerAddress")
         UserDefaults.standard.synchronize()
