@@ -27,8 +27,21 @@ enum NativePendingSetup {
         guard let id = DeviceSettings.defaults.string(forKey:key), UUID(uuidString:id) != nil else { return nil }
         return id
     }
-    static func begin(viewerID:String) { DeviceSettings.defaults.set(viewerID,forKey:key); DeviceSettings.defaults.synchronize() }
-    static func complete() { DeviceSettings.defaults.removeObject(forKey:key); DeviceSettings.defaults.synchronize() }
+    static let bindingKey = "nativePendingEnrollmentBinding.v1"
+    static var binding:DeviceBinding? {
+        guard let data = DeviceSettings.defaults.data(forKey:bindingKey) else { return nil }
+        return try? JSONDecoder().decode(DeviceBinding.self,from:data)
+    }
+    static func begin(viewerID:String, binding:DeviceBinding? = nil) {
+        DeviceSettings.defaults.set(viewerID,forKey:key)
+        if let binding = binding, let data = try? JSONEncoder().encode(binding) { DeviceSettings.defaults.set(data,forKey:bindingKey) }
+        else { DeviceSettings.defaults.removeObject(forKey:bindingKey) }
+        DeviceSettings.defaults.synchronize()
+    }
+    static func complete() {
+        DeviceSettings.defaults.removeObject(forKey:key); DeviceSettings.defaults.removeObject(forKey:bindingKey)
+        DeviceSettings.defaults.synchronize()
+    }
 }
 
 // Local recovery never needs the other account to be signed in. Deleting the
@@ -38,7 +51,7 @@ enum NativeLocalPairing {
     static func forget(removeCredential:() throws -> Void = { try DeviceVault.removeChecked(DeviceVault.credentialAccount) }) throws {
         try removeCredential()
         for key in [DeviceSettings.bindingKey,"nativeConnectionEnabled.v1","nativeHostAddress.v1",
-                    NativePendingSetup.key,"viewerShortCode","viewerAddress",
+                    NativePendingSetup.key,NativePendingSetup.bindingKey,"viewerShortCode","viewerAddress",
                     "RetinaLink.viewerUpdateRequested","RetinaLink.viewerUpdateTarget","RetinaLink.resumeViewerUpdate"] {
             DeviceSettings.defaults.removeObject(forKey:key)
         }
@@ -50,44 +63,59 @@ enum NativeLocalPairing {
 }
 
 #if HOST
-// Pure recovery policy. A replacement is permitted only for the exact profile
-// the owner selected locally. Pending enrollment remains tied to its peer ID.
+// Discovery/physical IDs only correlate the saved display. The existing key
+// is released to another login ONLY after both authenticated local approvals.
 enum NativeHostEnrollment {
     static func prepare(peer:NativePeer, identity:NativePeer, address:String,
                         existing:DeviceBinding?, pendingViewerID:String?, credential:String?,
-                        replacing:DeviceBinding?, viewerStartup:Bool, hostStartup:Bool) throws -> NativeEnrollment {
+                        replacing:DeviceBinding?, viewerStartup:Bool, hostStartup:Bool,
+                        pendingBinding:DeviceBinding? = nil, physicalID:String? = nil) throws -> NativeEnrollment {
         try peer.validate(role:"viewer"); try identity.validate(role:"host")
+        func validKey(_ key:String?) -> Bool { key?.count == 32 && key!.allSatisfy({"0123456789ABCDEF".contains($0)}) }
         if let existing = existing {
             if let pending = pendingViewerID {
-                guard pending == peer.id, existing.hostID == identity.id,
-                      existing.viewerName == peer.name, existing.username == peer.username,
-                      let credential = credential, credential.count == 32,
-                      credential.allSatisfy({"0123456789ABCDEF".contains($0)}) else {
-                    throw LinkError.invalid("Finish the interrupted setup with the same iMac account, or forget this display on Host before starting again.")
+                let target = pendingBinding ?? existing
+                guard pending == peer.id, target.hostID == identity.id,
+                      target.viewerName == peer.name, target.username == peer.username,
+                      target.viewerDeviceID == nil || target.viewerDeviceID == peer.id,
+                      validKey(credential) else {
+                    throw LinkError.invalid("Finish approval on the same iMac, or remove this display before starting again.")
                 }
-                return NativeEnrollment(binding:existing,credential:credential)
+                return NativeEnrollment(binding:target,credential:credential!)
             }
-            guard replacing == existing else { throw LinkError.invalid("Choose Set Up Another Account before replacing the saved display.") }
-            guard !(existing.dedicatedDisplay && existing.managementUsername != nil) else {
-                throw LinkError.invalid("Turn off Dedicated Mode before changing its display account. Automatic login still uses the original account.")
+            guard replacing == existing else { throw LinkError.invalid("Choose Reconnect Display before approving this connection.") }
+            if let saved = existing.viewerDeviceID, let physical = physicalID, saved != physical {
+                throw LinkError.invalid("This is a different iMac. Remove the saved display before adding another one.")
             }
+            guard validKey(credential) else { throw LinkError.invalid("Unlock this Mac’s login Keychain to reconnect your saved display.") }
         } else if replacing != nil || pendingViewerID != nil {
-            throw LinkError.invalid("The saved pairing changed. Close setup and try again.")
+            throw LinkError.invalid("The saved display changed. Close setup and try again.")
         }
-        let binding = DeviceBinding(hostID:identity.id,hostName:identity.name,viewerName:peer.name,
+        var binding = DeviceBinding(hostID:identity.id,hostName:identity.name,viewerName:peer.name,
             address:address,username:peer.username,dedicatedDisplay:false,
             viewerStartup:viewerStartup,hostStartup:hostStartup,fileVault:peer.fileVault,
-            automaticLoginConfigured:false,enrolledAt:Date())
+            automaticLoginConfigured:false,enrolledAt:existing?.enrolledAt ?? Date())
+        guard physicalID == nil || physicalID == peer.id else { throw LinkError.invalid("The display identity changed during approval.") }
+        binding.viewerDeviceID = physicalID
         try binding.validate()
-        return NativeEnrollment(binding:binding,credential:randomPairingCode().replacingOccurrences(of:"-",with:""))
+        // Retain the iMac's key: previously approved logins keep reconnecting.
+        return NativeEnrollment(binding:binding,credential:existing != nil ? credential! : randomPairingCode().replacingOccurrences(of:"-",with:""))
+    }
+    static func savedDisplay(_ request:NativeEnrollment, existing:DeviceBinding?) -> DeviceBinding {
+        guard var saved = existing else { return request.binding }
+        // In particular, NEVER retarget Dedicated Mode's account or auto login.
+        saved.viewerDeviceID = request.binding.viewerDeviceID ?? saved.viewerDeviceID
+        saved.address = request.binding.address
+        return saved
     }
 }
+
 #endif
 
 // All delegate callbacks are on the main run loop. Names/addresses are hints;
 // only the TLS credential or the two-screen approval can authenticate a peer.
 final class NativeDiscovery:NSObject,NetServiceBrowserDelegate,NetServiceDelegate {
-    struct Result { let name:String; let address:String; let port:UInt16; let id:String; var candidate:DirectLinkCandidate? = nil }
+    struct Result { let name:String; let address:String; let port:UInt16; let id:String; var candidate:DirectLinkCandidate? = nil; var physicalIdentity:Bool = false }
     let browser = NetServiceBrowser()
     let scoped = DirectLinkDiscovery()
     var services:[NetService] = [], results:[Result] = []
@@ -118,7 +146,7 @@ final class NativeDiscovery:NSObject,NetServiceBrowserDelegate,NetServiceDelegat
         let key = type == serviceType ? "hostID" : "viewerID"
         guard let data = txt[key], let id = String(data:data,encoding:.utf8), UUID(uuidString:id) != nil,
               hostID == nil || id == hostID else { return }
-        results.removeAll {$0.id == id}; results.append(Result(name:String(sender.name.prefix(160)),address:host,port:UInt16(sender.port),id:id,candidate:scoped.candidates.first {$0.id == id}))
+        results.removeAll {$0.id == id}; results.append(Result(name:String(sender.name.prefix(160)),address:host,port:UInt16(sender.port),id:id,candidate:scoped.candidates.first {$0.id == id},physicalIdentity:txt["displayIdentity"] == Data("1".utf8)))
         onChange?(results.sorted {$0.name.localizedStandardCompare($1.name) == .orderedAscending})
     }
     deinit { browser.stop(); services.forEach {$0.stop()} }
@@ -128,7 +156,7 @@ final class NativeDiscovery:NSObject,NetServiceBrowserDelegate,NetServiceDelegat
 enum NativeViewerEnrollment {
     static func apply(_ request:NativeEnrollment) throws {
         try request.binding.validate()
-        guard request.binding.username == NSUserName(), DeviceSettings.binding == nil,
+        guard request.binding.username == NativePeer.current(role:"viewer").username, DeviceSettings.binding == nil,
               request.credential.count == 32, request.credential.allSatisfy({"0123456789ABCDEF".contains($0)}) else {
             throw LinkError.invalid("An existing display pairing cannot be replaced remotely.")
         }
@@ -160,6 +188,10 @@ final class NativeViewerSetup:NSObject,NSWindowDelegate {
     private(set) var code:String?
     func start() {
         guard DeviceSettings.binding == nil, listener == nil else { return }
+        if DeviceSettings.nativeTestScope == nil {
+            var console = stat()
+            guard stat("/dev/console",&console) == 0, console.st_uid == getuid() else { return }
+        }
         let token = UUID(); generation = token
         onStatus?("Preparing secure setup…")
         DispatchQueue.global(qos:.utility).async { [weak self] in
@@ -178,17 +210,19 @@ final class NativeViewerSetup:NSObject,NSWindowDelegate {
             let port = UInt16(LaunchOptions.value("--native-pair-port") ?? "") ?? nativePairingPort
             let listener = try NWListener(using:parameters,on:NWEndpoint.Port(rawValue:port)!)
             listener.service = NWListener.Service(name:identity.name,type:nativePairingType,domain:nil,
-                txtRecord:NetService.data(fromTXTRecord:["viewerID":Data(identity.id.utf8)]))
-            listener.newConnectionHandler = { [weak self] in self?.accept($0) }
+                txtRecord:NetService.data(fromTXTRecord:["viewerID":Data(identity.id.utf8),"displayIdentity":Data((NativeDisplayIdentity.current == identity.id ? "1" : "0").utf8)]))
+            listener.newConnectionHandler = { [weak self,weak listener] connection in
+                guard let self = self, let listener = listener, self.listener === listener else { connection.cancel(); return }
+                self.accept(connection)
+            }
             listener.stateUpdateHandler = { [weak self] state in
-                if case .ready = state { self?.onStatus?("Open RetinaLink Host on your main Mac and choose Add Display. Approve that Mac here once. Remote Login is not needed.") }
+                if case .ready = state { self?.onStatus?("Open Host on your main Mac. Choose Reconnect Display for a saved iMac, or Add Display for first setup. Approve the matching number here.") }
                 if case .failed = state { self?.onStatus?("Setup could not listen. Check Local Network permission and try Make Discoverable in the Display menu.") }
             }
             self.listener = listener; listener.start(queue:.main)
-            DispatchQueue.main.asyncAfter(deadline:.now()+600) { [weak self] in
-                guard let self = self, self.generation == token else { return }
-                self.stop(); self.onStatus?("For a new pairing, choose Display → Make Discoverable in the menu bar.")
-            }
+            // Standby remains discoverable. Each handshake still expires after
+            // 120 seconds and attempts remain rate-limited; discovery grants no trust.
+
         } catch { onStatus?("Setup could not start. Try Make Discoverable in the Display menu.") }
     }
     private func accept(_ connection:NWConnection) {

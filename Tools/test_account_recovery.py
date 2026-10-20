@@ -15,7 +15,10 @@ def main():
     parser.add_argument('--apps',type=Path,required=True)
     parser.add_argument('--viewer-app',type=Path,help='Optional older Viewer app for protocol compatibility checks')
     parser.add_argument('--output',type=Path,required=True)
-    args=parser.parse_args(); out=args.output.resolve(); out.mkdir(parents=True,exist_ok=False)
+    parser.add_argument('--port-base',type=int,default=58560)
+    args=parser.parse_args()
+    if not 58500 <= args.port_base <= 65000:parser.error('Choose test ports between 58500 and 65000')
+    out=args.output.resolve(); out.mkdir(parents=True,exist_ok=False)
     apps=args.apps.resolve(); results=[]
     def run(argv): return subprocess.run([str(x) for x in argv],capture_output=True,text=True,check=True,timeout=20)
     def helper_off():
@@ -37,7 +40,7 @@ def main():
                 except (OSError,ValueError,KeyError):pass
                 time.sleep(.2)
             raise RuntimeError(label+' timed out')
-        port=str(58560+['cancel','replace','resume','forget-offline'].index(scenario))
+        port=str(args.port_base+['cancel','replace','resume','forget-offline'].index(scenario))
         def launch(role,scope,folder,extra):
             app=args.viewer_app.resolve() if role=='Viewer' and args.viewer_app else apps/f'RetinaLink {role}.app'
             run(['/usr/bin/open','-n',app,'--args','--native-test-harness',
@@ -47,6 +50,7 @@ def main():
             launch('Host',host_scope,hd,['--native-test-existing-binding','--native-test-address','127.0.0.1'])
             hs=wait('existing profile controls',lambda:state(hd) if state(hd)['stage']=='existing' else None)
             assert hs['paired'] and hs['continueEnabled'] and hs['boundUsername']=='account_a'
+            assert hs['primaryTitle']=='Reconnect Display…'
             original_key=hs['testCredentialSHA256']; original_binding=hs['bindingSHA256']
             if scenario=='forget-offline':
                 command(hd,'forget-local')
@@ -57,7 +61,7 @@ def main():
             extra=['--native-test-reject-first-enrollment'] if scenario=='resume' else []
             launch('Viewer',viewer_scope,vd,extra);viewer_started=True
             wait('fresh account ready',lambda:state(vd)['stage']=='waiting' and not state(vd)['paired'])
-            command(hd,'begin-account-change')
+            command(hd,'begin-reconnect')
             wait('new account selection',lambda:state(hd)['stage']=='choose')
             assert state(hd)['testCredentialSHA256']==original_key
             command(hd,'connect')
@@ -85,11 +89,14 @@ def main():
                 command(hd,'approve',code=hs['code']);command(vd,'approve',code=vs['code'])
             hs=wait('Host replacement committed',lambda:state(hd) if state(hd)['stage']=='complete' and not state(hd)['pending'] else None)
             vs=wait('Viewer replacement committed',lambda:state(vd) if state(vd)['stage']=='complete' and state(vd)['paired'] else None)
-            assert hs['testCredentialSHA256']==vs['testCredentialSHA256']!=original_key
-            assert hs['boundUsername']==os.environ['USER']
-            if 'boundUsername' in vs:assert vs['boundUsername']==hs['boundUsername']
+            assert hs['testCredentialSHA256']==vs['testCredentialSHA256']==original_key
+            assert hs['boundUsername']=='account_a'
+            assert hs['heading']=='Your display is paired.'
+            if 'physicalDisplayID' in vs:
+                assert hs['viewerDeviceID'] in ('',vs['physicalDisplayID'])
+            if 'boundUsername' in vs:assert vs['boundUsername']==os.environ['USER']
             if interrupted_key:assert hs['testCredentialSHA256']==interrupted_key
-            results.append({'scenario':scenario,'oldTrustKeptUntilBothApprove':True,'newCredentialSharedOnlyWithApprovedViewer':True,'resumeKeptNewCredential':bool(interrupted_key),'viewerBuild':vs['build']})
+            results.append({'scenario':scenario,'oldTrustKeptUntilBothApprove':True,'existingCredentialReleasedOnlyAfterBothApprovals':True,'oneSavedDisplay':True,'resumeKeptNewCredential':bool(interrupted_key),'viewerBuild':vs['build']})
         finally:
             command(hd,'cleanup')
             if viewer_started:command(vd,'cleanup')

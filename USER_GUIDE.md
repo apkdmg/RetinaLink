@@ -24,19 +24,21 @@ You need access to the iMac for the one-time Viewer installation and approval. N
 6. During setup, read the restart notice and choose **Open Viewer automatically after iMac sign-in** if you want Viewer to start whenever that account signs in. **Start Host automatically when this Mac signs in** enables startup on the main Mac too. These choices do not enable automatic login or change FileVault.
 7. Allow Host's Screen Recording permission and either app's Local Network permission if macOS requests them. Viewer does not need Screen Recording permission. Use **Arrange Displays** on Host to position the iMac beside your main display. Eject the installer volumes afterward.
 
-An unpaired Viewer is discoverable for ten minutes. If setup times out, use the iMac's **Display → Make Discoverable for Setup** menu and try **Add Display** again. A paired Viewer stops accepting new pairing requests. To reconnect an existing pair, open the original Host and use **Connect**; another pairing is unnecessary.
+Viewer 0.8.4 stays ready for setup while open. On older versions, discovery expires after ten minutes; use the iMac's **Display → Make Discoverable for Setup** menu to try again. A paired Viewer stops accepting new pairing requests. To reconnect an existing pair, open the original Host and use **Connect**; another pairing is unnecessary.
 
 If discovery is blocked, Host also accepts a local hostname or IP address. On a managed network, ask your administrator whether local device discovery and traffic are permitted. RetinaLink leaves company restrictions and network settings unchanged. See [connection and pairing details](NATIVE_CONNECTION.md).
 
-## Changing the iMac account
+## Reconnect your saved iMac
 
-Pairing belongs to the macOS account that runs Viewer, even if the app itself is installed in `/Applications` for everyone. Another account has separate preferences and a separate login Keychain; it needs its own approval. Signing out of account A and opening Viewer in account B does not transfer account A’s pairing.
+**Available from 0.8.4.** Host keeps one saved display for your iMac. Opening Viewer after a different macOS sign-in does not require removing the iMac or adding a duplicate display.
 
-**Recovery controls in the next development build (not in published 0.8.3):** In Host, choose **Add Display → Set Up Another Account…**, open Viewer in account B, select the iMac and approve the matching number on both Macs. Host keeps the old pairing until both approve, then replaces it with a new credential for account B. Cancelling before that point keeps account A’s pairing. Changing accounts does not change FileVault or automatic login. For an account managed by Dedicated Mode, turn that mode off through Dedicated Display Setup before changing accounts.
+If Viewer needs approval, choose **Reconnect Display…** on Host, select your iMac and approve the matching number on both screens. Your saved display stays in place. Previously approved logins keep reconnecting automatically, and cancellation preserves the existing connection. After approval, Viewer can start automatically after sign-in when that setup option is enabled. FileVault and automatic login stay unchanged, including the original Dedicated Display Mode configuration.
 
-If the original Viewer is unavailable, **Forget Display → Forget on This Mac** removes Host’s local trust without needing account A to sign in. It leaves the iMac’s original pairing and startup in place. To reuse that old account, use Viewer’s **Display → Reset Pairing for This Account…** before pairing again. A local reset does not alter other accounts, automatic login or FileVault. When both peers are connected, **Forget on Both Macs** can also remove Viewer’s pairing and startup normally.
+Viewer needs to be installed somewhere the person signing in can open it, normally `/Applications`. Each login keeps its approved connection privately in its own Keychain; a new login needs one approval before it can receive your desktop. There is no password or Remote Login step for this approval. Ordinary Viewer startup begins after sign-in, not before FileVault unlock.
 
-**Workaround for published 0.8.3:** Sign back into account A, open Viewer and let it reconnect. Choose **Forget Display** on Host while connected. Quit and reopen Host to discard an already-open disabled setup window, then sign into account B on the iMac, open Viewer and pair it using **Add Display**. Keep Viewer installed in a location account B can open.
+**Remove Display…** removes Host’s trust even when the iMac is offline. The unavailable Viewer cannot be cleaned remotely; use Viewer’s **Display → Reset Connection…** before approving it again. Reset affects that Viewer only. When connected, **Remove on Both Macs** additionally removes the current Viewer’s pairing and startup. Other logins' saved keys are not erased remotely, but cannot authenticate a Host after it removes the display key.
+
+**If you are still using 0.8.3:** Sign back into the original iMac login, open Viewer and let it reconnect. Choose **Forget Display** on Host while connected. Quit and reopen Host, then open Viewer after the desired sign-in and pair using **Add Display**. Updating to 0.8.4 provides the simpler reconnect flow above.
 
 ## Everyday use
 
@@ -50,7 +52,7 @@ Host provides these controls:
 - **Identify** helps you recognize the connected display.
 - **Disconnect** pauses the connection without removing pairing; **Connect** resumes it.
 - **Connection Details** shows connection status, display profiles and **Copy Diagnostics**.
-- **Forget Display…** deliberately removes pairing. In published 0.8.3, the original Viewer must be connected to finish, and its automatic startup is removed too. The [account-recovery section](#changing-the-imac-account) describes the upcoming offline recovery controls.
+- **Remove Display…** deliberately removes pairing, including when the iMac is offline. Earlier versions call this **Forget Display…** and require the original Viewer to be connected. See [saved-display reconnection](#reconnect-your-saved-imac).
 
 If the main Mac or connection becomes unavailable, Viewer keeps the iMac covered with a quiet fullscreen standby screen. It waits for the trusted Mac or network and retries automatically; it is not waiting for a Connect click. When the connection returns, the extended desktop replaces standby.
 

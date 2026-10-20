@@ -34,11 +34,13 @@ struct DeviceBinding: Codable, Equatable {
     var automaticLoginConfigured: Bool
     var enrolledAt: Date
     var managementUsername: String? = nil
+    var viewerDeviceID: String? = nil
     func validate() throws {
         guard UUID(uuidString:hostID) != nil,
               !hostName.isEmpty, hostName.utf8.count <= 160,
               !viewerName.isEmpty, viewerName.utf8.count <= 160,
-              Self.validAddress(address), Self.validUsername(username) else {
+              Self.validAddress(address), Self.validUsername(username),
+              viewerDeviceID == nil || UUID(uuidString:viewerDeviceID!) != nil else {
             throw LinkError.invalid("The display enrollment is invalid.")
         }
     }

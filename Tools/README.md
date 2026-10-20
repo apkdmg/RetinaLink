@@ -9,11 +9,21 @@ python3 Tools/test_account_recovery.py --apps /absolute/build/apps \
   --output /absolute/new-test-output
 ```
 
-The four cases cover cancellation preserving the old account’s trust, replacement only after both local approvals, retry after an enrollment persistence failure, and offline local forget reopening usable setup controls. Separate Viewer namespaces model another account’s empty state. This does not create real OS accounts or test a logout/login. Production pairing, startup, FileVault and network settings are outside the test scope, and the UI capture helper must stay off.
+The four cases cover cancellation preserving existing trust, reconnect approval only after both local approvals, retry after an enrollment persistence failure, and offline local removal reopening usable setup controls. Separate Viewer namespaces model another account’s empty state. This does not create real OS accounts or test a logout/login. Production pairing, startup, FileVault and network settings are outside the test scope, and the UI capture helper must stay off.
 
 Use `--viewer-app /absolute/older/RetinaLink\ Viewer.app` with a disposable copy to repeat the four cases with an older compatible Viewer. The published build-67 Viewer passes this check. Keep the installed production app outside the test paths.
 
-Both executables also expose `--pairing-recovery-test`, but only with `--native-test-harness --native-test-scope UUID`. Missing or malformed isolation exits before Keychain access. Use a fresh UUID for each run. These check a failed credential deletion preserving metadata, idempotent offline reset, stable identity, update preferences and the persistent guard against legacy hosting after reset. Host additionally checks the exact-profile replacement consent, new credentials, dedicated-mode guard and interrupted-peer binding. `--native-pairing-test` separately exercises the real TCP two-approval and cryptographic boundary without saved pairing.
+To exercise one saved display across two isolated logins, including a real encrypted echo connection and an earlier login reopening without fresh approval:
+
+```sh
+python3 Tools/test_saved_display.py --apps /absolute/build/apps \
+  --output /absolute/new-saved-display-output
+```
+
+This test gives the two Viewer instances different test-only login names and the same test-only physical identity. It verifies no key is available before approval, the Host keeps its display name/enrollment date/credential, and both approved Viewer scopes authenticate new TCP/TLS connections. Test identity overrides require the existing UUID isolation guard. It does not substitute for an actual macOS logout/login or inactive-session hardware test. No UI capture helper or screen-stream capture is used.
+
+
+Both executables also expose `--pairing-recovery-test`, but only with `--native-test-harness --native-test-scope UUID`. Missing or malformed isolation exits before Keychain access. Use a fresh UUID for each run. These check a failed credential deletion preserving metadata, idempotent offline reset, stable identity, update preferences and the persistent guard against legacy hosting after reset. Host additionally checks the explicit reconnect consent, retained credentials, preserved Dedicated Mode metadata and interrupted-peer binding. `--native-pairing-test` separately exercises the real TCP two-approval and cryptographic boundary without saved pairing.
 
 ## Host-delivered Viewer update relay (0.8.3)
 

@@ -31,9 +31,14 @@ final class ViewerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
     var verifiedPreferredUntil:Double = 0
     var intentionalHandoverConnectionID:String?
     var lastProbeResult:[String:Any] = [:]
+    var sessionObservers:[NSObjectProtocol] = []
+    var sessionActive:Bool {
+        var console = stat()
+        return stat("/dev/console",&console) == 0 && console.st_uid == getuid()
+    }
     func applicationDidFinishLaunching(_ notification: Notification) {
         installMenu(); addMaintenanceMenu()
-        deviceName.stringValue = "\(Host.current().localizedName ?? "iMac") · Account: \(NSUserName())"
+        deviceName.stringValue = Host.current().localizedName ?? "iMac"
         do { try DedicatedViewerStartup.applyPendingEnrollment() }
         catch { DiagnosticLog.shared.record("setup",String(describing:error)) }
         DedicatedViewerStartup.keepReady()
@@ -47,6 +52,23 @@ final class ViewerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
             self.showStandby("Your iMac is ready.",detail:text,phase:"ready")
         }
         nativeSetup.onPaired = { [weak self] in self?.startNativeDiscovery(); self?.connect() }
+        let center = NSWorkspace.shared.notificationCenter
+        sessionObservers.append(center.addObserver(forName:NSWorkspace.sessionDidResignActiveNotification,object:nil,queue:.main) { [weak self] _ in
+            guard let self = self else { return }
+            self.nativeSetup.stop(); self.reconnect?.cancel(); self.reconnect = nil
+            self.routeProbe?.cancel(); self.routeProbe = nil
+            let previous = self.link; self.link = nil; previous?.cancel()
+            self.softwareUpdater.detachRelay(); self.activeCandidate = nil
+            self.connected = false; self.receivedFrame = false; self.activity = nil
+            self.statsTimer?.invalidate(); self.statsTimer = nil
+            self.display?.removeFromSuperview(); self.display = nil
+            self.showStandby("Waiting for sign-in…",detail:"Your display stays saved and reconnects automatically.",phase:"waiting")
+        })
+        sessionObservers.append(center.addObserver(forName:NSWorkspace.sessionDidBecomeActiveNotification,object:nil,queue:.main) { [weak self] _ in
+            guard let self = self else { return }
+            if DeviceSettings.binding == nil { self.nativeSetup.start() } else { self.startNativeDiscovery() }
+            self.connect()
+        })
         if DeviceSettings.binding == nil { nativeSetup.start() } else { startNativeDiscovery() }
         DiagnosticLog.shared.record("launch","Viewer appliance ready; fullscreen and automatic reconnection; UI capture helper unused")
         uiTimer = Timer.scheduledTimer(withTimeInterval:1,repeats:true) { [weak self] _ in
@@ -81,7 +103,7 @@ final class ViewerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         if desiredFullscreen { NSApp.presentationOptions = [.autoHideDock,.autoHideMenuBar] }
         NSApp.activate(ignoringOtherApps:true)
         if !desiredFullscreen { window.center() }
-        if DeviceSettings.binding == nil { subtitle.stringValue = "Open Host on your main Mac and choose Add Display. If it remembers another iMac account, choose Set Up Another Account. Approve this account here once." }
+        if DeviceSettings.binding == nil { subtitle.stringValue = "Open Host on your main Mac. Choose Reconnect Display if your iMac is already saved, or Add Display for first setup." }
         else { showStandby("Waiting for your Mac…",detail:"Your display will connect automatically. No action is needed here.",phase:"waiting") }
     }
     func showStandby(_ title: String, detail: String, phase: String) {
@@ -97,7 +119,7 @@ final class ViewerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
             do { try DedicatedViewerStartup.applyPendingEnrollment(); DedicatedViewerStartup.keepReady() }
             catch { DiagnosticLog.shared.record("setup",String(describing:error)) }
         }
-        guard automatic, !terminating, link == nil else { return }
+        guard automatic, !terminating, link == nil, sessionActive else { return }
         hostSupportsUpdates = false
         reconnect?.cancel(); reconnect = nil
         do {
@@ -403,7 +425,7 @@ final class ViewerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         menu.addItem(withTitle:"Return to Full Screen",action:#selector(restoreFullscreen),keyEquivalent:"f").target = self
         menu.addItem(withTitle:"Make Discoverable for Setup",action:#selector(makeDiscoverable),keyEquivalent:"").target = self
         menu.addItem(.separator())
-        menu.addItem(withTitle:"Reset Pairing for This Account…",action:#selector(resetLocalPairing),keyEquivalent:"").target = self
+        menu.addItem(withTitle:"Reset Connection…",action:#selector(resetLocalPairing),keyEquivalent:"").target = self
         item.submenu = menu; NSApp.mainMenu?.addItem(item)
     }
     @objc func makeDiscoverable() {
@@ -414,8 +436,8 @@ final class ViewerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
     @objc func resetLocalPairing() {
         let alert = NSAlert(); alert.alertStyle = .warning
-        alert.messageText = "Reset pairing for account “\(NSUserName())”?"
-        alert.informativeText = "This account’s Viewer will disconnect and ask for approval again. The Host keeps its own profile; use Add Display → Set Up Another Account there. Automatic login, Viewer startup, FileVault and other accounts are unchanged."
+        alert.messageText = "Reset this Viewer’s connection?"
+        alert.informativeText = "This Viewer will disconnect and ask for approval again. Your iMac stays saved on Host; choose Reconnect Display there. FileVault and login settings stay unchanged."
         alert.addButton(withTitle:"Reset Pairing"); alert.addButton(withTitle:"Cancel")
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         do { try NativeLocalPairing.forget() }
@@ -426,7 +448,7 @@ final class ViewerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let old = link; link = nil; old?.cancel(); softwareUpdater.detachRelay()
         connected = false; receivedFrame = false; hostSupportsUpdates = false; paused = false
         statsTimer?.invalidate(); statsTimer = nil; activity = nil; display?.removeFromSuperview(); display = nil
-        showStandby("Your iMac is ready.",detail:"Pair account “\(NSUserName())” using Add Display on your main Mac.",phase:"ready")
+        showStandby("Your iMac is ready.",detail:"Choose Reconnect Display on your main Mac, then approve the matching number.",phase:"ready")
         nativeSetup.start()
     }
     @objc func showMaintenance() { showStandby("Your RetinaLink display",detail:"Manage pairing and connection from your main Mac. Quit RetinaLink from the menu for local maintenance.",phase:"maintenance") }

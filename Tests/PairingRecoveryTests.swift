@@ -35,18 +35,30 @@ func runPairingRecoveryTests() throws {
     let peer = NativePeer(role:"viewer",id:UUID().uuidString,name:"iMac",username:"account_b",fileVault:.on,version:"test")
     func prepare(_ existing:DeviceBinding?, _ replacement:DeviceBinding?, pending:String? = nil, key:String? = oldKey) throws -> NativeEnrollment {
         try NativeHostEnrollment.prepare(peer:peer,identity:identity,address:"127.0.0.1",existing:existing,
-            pendingViewerID:pending,credential:key,replacing:replacement,viewerStartup:false,hostStartup:false)
+            pendingViewerID:pending,credential:key,replacing:replacement,viewerStartup:false,hostStartup:false,physicalID:peer.id)
     }
     try expectInvalid { _ = try prepare(binding,nil) }
     var stale = binding; stale.address = "old-imac.local"
     try expectInvalid { _ = try prepare(binding,stale) }
     var dedicated = binding; dedicated.dedicatedDisplay = true; dedicated.managementUsername = "administrator"
-    try expectInvalid { _ = try prepare(dedicated,dedicated) }
+    let dedicatedReconnect = try prepare(dedicated,dedicated)
+    let retainedDedicated = NativeHostEnrollment.savedDisplay(dedicatedReconnect,existing:dedicated)
+    try check(retainedDedicated.username == dedicated.username && retainedDedicated.dedicatedDisplay &&
+              retainedDedicated.managementUsername == dedicated.managementUsername &&
+              retainedDedicated.automaticLoginConfigured == dedicated.automaticLoginConfigured,
+              "Reconnection retargeted Dedicated Mode")
     try expectInvalid { _ = try prepare(binding,binding,pending:UUID().uuidString) }
+    var otherDisplay = binding; otherDisplay.viewerDeviceID = UUID().uuidString
+    try expectInvalid { _ = try prepare(otherDisplay,otherDisplay) }
     let fresh = try prepare(binding,binding)
     try check(fresh.binding.username == "account_b" && fresh.binding.fileVault == .on && !fresh.binding.automaticLoginConfigured,
               "Account replacement changed FileVault or requested automatic login")
-    try check(fresh.credential != oldKey && fresh.credential.count == 32,"Account replacement reused account A’s key")
+    try check(fresh.credential == oldKey,"Reconnection invalidated a previously approved Viewer")
+    let savedDisplay = NativeHostEnrollment.savedDisplay(fresh,existing:binding)
+    try check(savedDisplay.viewerName == binding.viewerName && savedDisplay.enrolledAt == binding.enrolledAt &&
+              savedDisplay.viewerDeviceID == peer.id,"Reconnection duplicated or renamed the saved display")
+    try expectInvalid { _ = try prepare(binding,binding,key:nil) }
+    try expectInvalid { _ = try prepare(binding,binding,key:"invalid") }
     try check(DeviceSettings.binding == binding && (try DeviceVault.credential()) == oldKey,
               "Preparing replacement changed the original pairing")
     let resumed = try prepare(fresh.binding,nil,pending:peer.id,key:fresh.credential)
@@ -54,7 +66,11 @@ func runPairingRecoveryTests() throws {
     try expectInvalid { _ = try prepare(fresh.binding,nil,pending:peer.id,key:nil) }
     try expectInvalid { _ = try prepare(fresh.binding,nil,pending:peer.id,key:"invalid") }
     try expectInvalid { _ = try prepare(binding,binding,pending:peer.id) }
-    print("PASS: explicit current-profile consent, standard-account replacement, fresh credential, dedicated-account guard and interrupted setup identity")
+    try check(NativeDisplayIdentity.current != nil && NativeDisplayIdentity.current == NativeDisplayIdentity.current,"Physical display identity is missing or unstable")
+    let recovery = try NativeHostEnrollment.prepare(peer:peer,identity:identity,address:"127.0.0.1",existing:retainedDedicated,
+        pendingViewerID:peer.id,credential:oldKey,replacing:nil,viewerStartup:false,hostStartup:false,pendingBinding:dedicatedReconnect.binding)
+    try check(recovery.binding.username == peer.username && recovery.credential == oldKey,"Managed reconnect could not resume without changing auto login")
+    print("PASS: local consent, one saved display, retained approved key, Dedicated Mode preserved and interrupted approval bound to its Viewer")
     #endif
     try NativeLocalPairing.forget()
     try check(DeviceSettings.binding == nil && (try DeviceVault.credential()) == nil && !NativeConnectionSettings.enabled,

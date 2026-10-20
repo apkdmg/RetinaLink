@@ -300,6 +300,9 @@ final class HostApp: NSObject, NSApplicationDelegate {
     var displayPaused = UserDefaults.standard.bool(forKey:"displayPaused")
     var setupController: HostSetupController?, tunnel: TunnelSupervisor?
     var nativeSetupController:NativeHostSetup?
+    let recoveryDiscovery = NativeDiscovery()
+    var reconnectCandidate:NativeDiscovery.Result?
+    var addDisplayButton:NSButton?
     var forgettingNative = false
     var homeTimer: Timer?, statusItem: NSStatusItem?
     var windowLifecycle: HostWindowLifecycle?
@@ -353,6 +356,7 @@ final class HostApp: NSObject, NSApplicationDelegate {
         pairingModeChanged()
         addresses.stringValue = localAddresses()
         makeHome()
+        watchForDisplayApproval()
         if let statusItem = statusItem {
             let lifecycle = HostWindowLifecycle(home:window,statusItem:statusItem)
             windowLifecycle = lifecycle; lifecycle.start(background:LaunchOptions.has("--autostart"))
@@ -374,15 +378,15 @@ final class HostApp: NSObject, NSApplicationDelegate {
         let hero = Design.card([horizontal([artwork,information]),horizontal([
             Design.button("Arrange Displays",target:self,action:#selector(arrange)),
             Design.button("Identify",target:self,action:#selector(identify)),button])],padding:25)
-        let add = Design.button("Add Display",target:self,action:#selector(addDisplay),primary:true)
+        let add = Design.button("Add Display",target:self,action:#selector(addDisplay),primary:true); addDisplayButton = add
         let spacer = NSView(); spacer.setContentHuggingPriority(.defaultLow,for:.horizontal)
         let heading = horizontal([Design.vertical([Design.text("Your displays",30,.bold),Design.text("Set up once. Connect effortlessly.",14,secondary:true)],spacing:7),spacer,add])
         let automatic = Design.card([Design.message("Always ready, after sign-in",detail:"Connect your Macs with a compatible USB data cable or Ethernet. Viewer finds the connection and reconnects automatically. Your display stays paired and company network settings stay unchanged.",symbol:"arrow.triangle.2.circlepath"),restartNote,
-            horizontal([Design.button("Display Setup…",target:self,action:#selector(addDisplay)),Design.button("Dedicated Display Guide…",target:self,action:#selector(dedicatedGuide))])])
+            horizontal([Design.button("Reconnect Display…",target:self,action:#selector(addDisplay)),Design.button("Dedicated Display Guide…",target:self,action:#selector(dedicatedGuide))])])
         updateButton = Design.button("Update Display Software…",target:self,action:#selector(updateViewerSoftware))
         let details = Design.card([Design.text("Connection details",17,.semibold),Design.text("Native 5K at a target of 60 updates/s. Actual performance depends on capture and network conditions.",12,secondary:true),status,profiles,stats,updateButton!,
             horizontal([Design.button("Copy Diagnostics",target:self,action:#selector(copyDiagnostics)),retryCaptureButton]),
-            Design.button("Forget Display…",target:self,action:#selector(forgetDisplay)),
+            Design.button("Remove Display…",target:self,action:#selector(forgetDisplay)),
             Design.text("Legacy connection",13,.semibold),horizontal([pairingMode,copyCodeButton,newCodeButton]),pairing,pairingNote,addresses])
         details.isHidden = true; advanced = details
         stats.font = .monospacedSystemFont(ofSize:11,weight:.regular)
@@ -407,6 +411,7 @@ final class HostApp: NSObject, NSApplicationDelegate {
     func refreshHome() {
         consumeTestCommand()
         updateButton?.isEnabled = !updatingViewer && DeviceSettings.binding != nil && trustedCredential != nil && DistributionTrust.team != nil
+        addDisplayButton?.title = DeviceSettings.binding == nil ? "Add Display" : "Manage Display…"
         if let binding = DeviceSettings.binding {
             displayName.stringValue = binding.viewerName
             displaySubtitle.stringValue = displayPaused ? "Paused · still securely paired" : (capture == nil ? "Ready to connect · Native 5K" : "Extended desktop · Native 5K")
@@ -421,7 +426,11 @@ final class HostApp: NSObject, NSApplicationDelegate {
             }
             if waitingForPermission { button?.title = "Retry Capture"; button?.action = #selector(retryCapture) }
             pairing.stringValue = "Device pairing is managed automatically."
-            pairingNote.stringValue = "Paired with iMac account “\(binding.username)”. To change accounts, choose Display Setup → Set Up Another Account."
+            pairingNote.stringValue = "Your iMac stays saved across sign-ins. If Viewer needs approval, choose Reconnect Display."
+            if reconnectCandidate != nil && link == nil {
+                homeStatus.stringValue = "Your iMac is ready for approval"
+                button?.title = "Reconnect Display…"; button?.action = #selector(addDisplay)
+            }
             copyCodeButton?.isHidden = true; newCodeButton?.isHidden = true; pairingMode.isHidden = true
         } else {
             restartNote.stringValue = "Setup checks FileVault first and explains any restart limits. No disk changes or additional macOS installation."
@@ -544,21 +553,21 @@ final class HostApp: NSObject, NSApplicationDelegate {
     @objc func identify() { link?.send(5,Data("identify".utf8)) }
     @objc func forgetDisplay() {
         guard let binding = DeviceSettings.binding else { return }
-        let alert = NSAlert(); alert.alertStyle = .warning; alert.messageText = "Forget \(binding.viewerName)?"
+        let alert = NSAlert(); alert.alertStyle = .warning; alert.messageText = "Remove \(binding.viewerName)?"
         let dedicated = binding.managementUsername != nil && binding.dedicatedDisplay
         let online = link != nil && helloReceived
         if dedicated {
             alert.informativeText = "Dedicated Mode still controls automatic login to “\(binding.username)”. Use Dedicated Display Setup to restore ordinary login first. Forgetting only on this Mac removes Host’s trust but leaves the iMac’s account, startup and login settings as they are."
             alert.addButton(withTitle:"Dedicated Display Setup…")
         } else if NativeConnectionSettings.enabled && !online {
-            alert.informativeText = "The original Viewer is unavailable. Forgetting on this Mac removes its saved pairing and stops this connection. The iMac’s saved pairing and startup remain in its original account; reset pairing there if you use it again. FileVault, accounts and network settings stay unchanged."
-            alert.addButton(withTitle:"Forget on This Mac")
+            alert.informativeText = "Removing this display stops the connection and removes it from Host. If you add it again, choose Reset Connection in Viewer first. FileVault and login settings stay unchanged."
+            alert.addButton(withTitle:"Remove on This Mac")
         } else {
             alert.informativeText = "Forget on both Macs removes pairing and Viewer startup through the current connection. You can also remove only this Mac’s pairing if the original Viewer is unavailable. FileVault, accounts and login settings stay unchanged."
-            alert.addButton(withTitle:"Forget on Both Macs")
+            alert.addButton(withTitle:"Remove on Both Macs")
         }
         alert.addButton(withTitle:"Cancel")
-        if dedicated || online || !NativeConnectionSettings.enabled { alert.addButton(withTitle:"Forget on This Mac Only") }
+        if dedicated || online || !NativeConnectionSettings.enabled { alert.addButton(withTitle:"Remove on This Mac Only") }
         let response = alert.runModal()
         if response == .alertThirdButtonReturn { forgetOnThisMac() }
         else if response == .alertFirstButtonReturn {
@@ -570,13 +579,14 @@ final class HostApp: NSObject, NSApplicationDelegate {
         do { try NativeLocalPairing.forget() }
         catch { connectionNote.stringValue = String(describing:error); return }
         nativeSetupController?.cancel(); nativeSetupController = nil
+        recoveryDiscovery.stop(); reconnectCandidate = nil
         reconnectEnabled = false; forgettingNative = false; trustedCredential = nil
         viewerUpdateState = nil; viewerUpdateTarget = nil; viewerUpdateRequested = false; pendingHostUpdate = false
         displayPaused = false; UserDefaults.standard.set(false,forKey:"displayPaused")
         tunnel?.stop(disconnect:true); tunnel = nil
-        stop(message:"Display forgotten. Choose Add Display to set up the iMac account you want to use.",reconnect:false)
+        stop(message:"Display removed. Choose Add Display to connect your iMac again.",reconnect:false)
         displayName.stringValue = "A second life for your iMac."
-        connectionNote.stringValue = viewerConfirmed ? "Pairing removed on both Macs." : "Forgotten on this Mac. The iMac’s original account and startup settings were left unchanged."
+        connectionNote.stringValue = viewerConfirmed ? "Pairing removed on both Macs." : "Removed from this Mac. FileVault and the iMac’s login settings are unchanged."
         refreshHome()
     }
     func forgetConfirmed() {
@@ -591,7 +601,7 @@ final class HostApp: NSObject, NSApplicationDelegate {
             connectionNote.stringValue = "Removing pairing through your encrypted app connection…"
             DispatchQueue.main.asyncAfter(deadline:.now()+10) { [weak self] in
                 guard let self = self, self.forgettingNative else { return }
-                self.forgettingNative = false; self.connectionNote.stringValue = "Viewer did not confirm removal. Choose Forget Display → Forget on This Mac Only to remove the local pairing."
+                self.forgettingNative = false; self.connectionNote.stringValue = "Viewer did not confirm removal. Choose Remove Display → Remove on This Mac Only to remove the local pairing."
             }
             return
         }
@@ -617,6 +627,16 @@ final class HostApp: NSObject, NSApplicationDelegate {
         legacyDisplaySetup()
         if let controller = setupController { controller.dedicated.state = .on; controller.advance() }
     }
+    func watchForDisplayApproval() {
+        guard DeviceSettings.binding != nil else { recoveryDiscovery.stop(); reconnectCandidate = nil; return }
+        recoveryDiscovery.onChange = { [weak self] items in
+            guard let self = self, let binding = DeviceSettings.binding else { return }
+            // Unauthenticated hints only change presentation, never credentials.
+            self.reconnectCandidate = items.first { $0.id == binding.viewerDeviceID } ??
+                (binding.viewerDeviceID == nil ? items.first { $0.name == binding.viewerName } : nil)
+        }
+        recoveryDiscovery.start(type:nativePairingType)
+    }
     @objc func addDisplay() {
         windowLifecycle?.prepareForControls()
         if nativeSetupController == nil {
@@ -634,7 +654,7 @@ final class HostApp: NSObject, NSApplicationDelegate {
         do { trustedCredential = try DeviceVault.credential() } catch { connectionNote.stringValue = String(describing:error); return }
         reconnectEnabled = true; displayPaused = false; UserDefaults.standard.set(false,forKey:"displayPaused")
         stop(message:"Your display is paired. Connecting automatically…")
-        startTunnel(); refreshHome()
+        startTunnel(); watchForDisplayApproval(); refreshHome()
         DiagnosticLog.shared.record("setup","Enrollment complete; encrypted trusted pairing; Viewer startup enabled; FileVault unchanged")
     }
     func startTunnel() {

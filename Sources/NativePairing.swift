@@ -2,6 +2,7 @@ import Foundation
 import Network
 import CryptoKit
 import Security
+import IOKit
 
 let nativePairingType = "_retina-pair._tcp"
 let nativePairingPort: UInt16 = 58477
@@ -28,12 +29,32 @@ struct NativePeer: Codable, Equatable {
     static func current(role:String,fileVault:FileVaultState = .unknown) -> NativePeer {
         let id: String
         if role == "host" { id = DeviceSettings.hostID }
+        else if let physical = NativeDisplayIdentity.current { id = physical }
         else if let saved = DeviceSettings.defaults.string(forKey:"nativeViewerID"), UUID(uuidString:saved) != nil { id = saved }
         else { id = UUID().uuidString; DeviceSettings.defaults.set(id,forKey:"nativeViewerID") }
         let name = String((Host.current().localizedName ?? (role == "host" ? "Mac" : "iMac"))
             .unicodeScalars.filter { !CharacterSet.controlCharacters.contains($0) }.map(String.init).joined().prefix(120))
-        return NativePeer(role:role,id:id,name:name,username:NSUserName(),fileVault:fileVault,
+        let testName = DeviceSettings.nativeTestScope != nil ? LaunchOptions.value("--native-test-username") : nil
+        return NativePeer(role:role,id:id,name:name,username:testName ?? NSUserName(),fileVault:fileVault,
                           version:ProcessInfo.processInfo.operatingSystemVersionString)
+    }
+}
+
+// Public correlation hint, never an authentication credential. Every new
+// login still needs both local approvals before receiving the existing key.
+// Keep NativePeer's wire shape unchanged for published Viewer compatibility.
+enum NativeDisplayIdentity {
+    static var current:String? {
+        if DeviceSettings.nativeTestScope != nil,
+           let value = LaunchOptions.value("--native-test-device-id"), UUID(uuidString:value) != nil { return value }
+        let entry = IOServiceGetMatchingService(kIOMasterPortDefault,IOServiceMatching("IOPlatformExpertDevice"))
+        guard entry != 0 else { return nil }; defer { IOObjectRelease(entry) }
+        guard let value = IORegistryEntryCreateCFProperty(entry,kIOPlatformUUIDKey as CFString,kCFAllocatorDefault,0)?.takeRetainedValue() as? String,
+              UUID(uuidString:value) != nil else { return nil }
+        let digest = SHA256.hash(data:Data(("RetinaLink display identity v1:"+value.uppercased()).utf8))
+        let hex = digest.prefix(16).map { String(format:"%02X",$0) }.joined()
+        let cuts = [8,4,4,4,12]; var offset = hex.startIndex
+        return cuts.map { count -> String in let end = hex.index(offset,offsetBy:count); defer { offset = end }; return String(hex[offset..<end]) }.joined(separator:"-")
     }
 }
 
