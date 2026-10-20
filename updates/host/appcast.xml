@@ -4,16 +4,16 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <channel>
         <title>RetinaLink Host</title>
         <item>
-            <title>0.8.3</title>
-            <pubDate>Mon, 19 Oct 2026 17:34:02 +0800</pubDate>
-            <sparkle:version>67</sparkle:version>
-            <sparkle:shortVersionString>0.8.3</sparkle:shortVersionString>
+            <title>0.8.4</title>
+            <pubDate>Tue, 20 Oct 2026 08:52:44 +0800</pubDate>
+            <sparkle:version>70</sparkle:version>
+            <sparkle:shortVersionString>0.8.4</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
             <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <enclosure url="https://github.com/apkdmg/RetinaLink/releases/download/v0.8.3/RetinaLink-Host-0.8.3-67.zip" length="6628391" type="application/octet-stream" sparkle:edSignature="oqsOiCgJeBuAUqlpDr3dLDJ1NGBHSZeGWP4yJOqsEQzwePVgAoNtDW82hsUg2pI0SHc9BjOVHLQfBDz/dl+gDQ=="></enclosure>
+            <enclosure url="https://github.com/apkdmg/RetinaLink/releases/download/v0.8.4/RetinaLink-Host-0.8.4-70.zip" length="6690049" type="application/octet-stream" sparkle:edSignature="HCl6ADV+UzKrmVs7jLJiDrMBtymAqi7ZDL9dTsUpqxcwb0v5YUYmJJfuDDVDrdyKrqPwdxbImNwby4fCkwXoBA=="></enclosure>
         </item>
     </channel>
 </rss><!-- sparkle-signatures:
-edSignature: x7Qg0GkFjhcKkWa0Ibcv7BCEqVdVp/oIVEvPXo75fGQlCP+L6f52KZGEghG3NVshKt41lv9z5bZWcVNsjVy+Aw==
+edSignature: kKe03eGaxDj6b8WTp7i+fyRpofBymVf5ErerV+IuJaO4nMqm1IvfMU+2Z32Dn/KdlLjz5lfwJvrWUDGQcrVRAw==
 length: 1138
 -->
