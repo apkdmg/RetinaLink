@@ -6,10 +6,15 @@ import Network
 // a UUID-isolated preference/Keychain namespace. It never accesses live trust.
 final class NativeTestHarness:NSObject,NSApplicationDelegate {
     var timer:Timer?
-    var probe = "idle", streamReady = false
+    var probe = "idle", streamReady = false, desktopState = "unknown"
+    var desktopProbe = 0, desktopProbeCompleted = 0
     var streamListener:NWListener?, streamPeers:[Link] = []
     func startTestStream() {
         #if HOST
+        if NativeSavedDisplay.connectionBinding == nil {
+            streamListener?.cancel(); streamListener = nil; streamReady = false
+            streamPeers.forEach {$0.cancel()}; streamPeers.removeAll(); return
+        }
         guard streamListener == nil, let raw = LaunchOptions.value("--native-test-stream-port"),
               let port = UInt16(raw), port >= 58500, let key = try? DeviceVault.credential() else { return }
         do {
@@ -19,7 +24,10 @@ final class NativeTestHarness:NSObject,NSApplicationDelegate {
             listener.newConnectionHandler = { [weak self] connection in
                 guard let self = self else { return }; let link = Link(connection); self.streamPeers.append(link)
                 link.onMessage = { [weak link] type,data in
-                    guard type == 77, data.count < 128 else { link?.cancel(); return }; link?.send(type,data)
+                    guard data.count < 128 else { link?.cancel(); return }
+                    if type == 77 { link?.send(type,data) }
+                    else if type == 78 { link?.send(type,Data((NativeSavedDisplay.mayShareDesktop ? "sharing" : "removed").utf8)) }
+                    else { link?.cancel() }
                 }
                 link.start()
             }
@@ -27,8 +35,10 @@ final class NativeTestHarness:NSObject,NSApplicationDelegate {
         } catch { probe = "failed" }
         #endif
     }
-    func probeSavedConnection() {
+    func probeSavedConnection(sharingState:Bool = false) {
         #if !HOST
+        if sharingState { desktopProbe += 1 }
+        let generation = desktopProbe
         guard let raw = LaunchOptions.value("--native-test-stream-port"), let port = UInt16(raw), port >= 58500 else { return }
         guard let key = try? DeviceVault.credential() else { probe = "not-approved"; return }
         do {
@@ -36,9 +46,14 @@ final class NativeTestHarness:NSObject,NSApplicationDelegate {
             let link = Link(NWConnection(host:NWEndpoint.Host(host),port:NWEndpoint.Port(rawValue:port)!,using:try networkParameters(key)))
             streamPeers.append(link); probe = "connecting"
             let token = Data(UUID().uuidString.utf8)
-            link.onReady = { [weak link] in link?.send(77,token) }
+            link.onReady = { [weak link] in link?.send(sharingState ? 78 : 77,token) }
             link.onMessage = { [weak self,weak link] type,data in
-                DispatchQueue.main.async { self?.probe = type == 77 && data == token ? "passed" : "failed"; link?.cancel() }
+                DispatchQueue.main.async {
+                    if sharingState, type == 78, let value = String(data:data,encoding:.utf8), ["sharing","removed"].contains(value) {
+                        self?.desktopState = value; self?.desktopProbeCompleted = generation; self?.probe = "passed"
+                    } else { self?.probe = type == 77 && data == token ? "passed" : "failed" }
+                    link?.cancel()
+                }
             }
             link.onClose = { [weak self] _ in DispatchQueue.main.async { if self?.probe == "connecting" { self?.probe = "failed" } } }
             link.start()
@@ -69,7 +84,7 @@ final class NativeTestHarness:NSObject,NSApplicationDelegate {
         if let address = LaunchOptions.value("--native-test-address") {
             setup.address.stringValue = address
             setup.targetPort = UInt16(LaunchOptions.value("--native-pair-port") ?? "") ?? nativePairingPort
-            if setup.stage != "existing" { setup.advance() }
+            if setup.stage == "choose" { setup.advance() }
         }
         #else
         if LaunchOptions.has("--native-test-approved-viewer") {
@@ -97,7 +112,7 @@ final class NativeTestHarness:NSObject,NSApplicationDelegate {
         #endif
         let paired = DeviceSettings.binding != nil
         var state:[String:Any] = ["pid":getpid(),"build":LaunchOptions.build,"stage":stage,
-            "paired":paired,"code":code ?? "","localApproved":localApproved,"probe":probe,"tlsReady":streamReady,
+            "paired":paired,"code":code ?? "","localApproved":localApproved,"probe":probe,"tlsReady":streamReady,"desktopState":desktopState,
             "fileVaultChanged":false,"scope":DeviceSettings.nativeTestScope!,"pending":NativePendingSetup.viewerID != nil,"time":Date().timeIntervalSince1970]
         if let binding = DeviceSettings.binding, let data = try? nativeJSON(binding) {
             state["bindingSHA256"] = Data(SHA256.hash(data:data)).base64EncodedString()
@@ -107,8 +122,14 @@ final class NativeTestHarness:NSObject,NSApplicationDelegate {
         state["primaryTitle"] = setup.continueButton.title
         state["message"] = setup.result.stringValue
         state["heading"] = setup.heading.stringValue
+        state["displayRemoved"] = NativeSavedDisplay.isRemoved
+        state["mayShareDesktop"] = NativeSavedDisplay.mayShareDesktop
+        if let approval = NativeSavedDisplay.removed, let data = try? nativeJSON(approval.binding) {
+            state["retainedBindingSHA256"] = Data(SHA256.hash(data:data)).base64EncodedString()
+        }
         #endif
         state["boundUsername"] = DeviceSettings.binding?.username ?? ""
+        state["desktopProbeCompleted"] = desktopProbeCompleted
         state["savedDisplayName"] = DeviceSettings.binding?.viewerName ?? ""
         state["savedDisplayDate"] = DeviceSettings.binding?.enrolledAt.timeIntervalSince1970 ?? 0
         state["viewerDeviceID"] = DeviceSettings.binding?.viewerDeviceID ?? ""
@@ -143,6 +164,7 @@ final class NativeTestHarness:NSObject,NSApplicationDelegate {
             setup.beginReconnect()
             #endif
         case "probe": probeSavedConnection()
+        case "probe-state": desktopState = "unknown"; probeSavedConnection(sharingState:true)
         case "exit": NSApp.terminate(nil)
         case "reopen":
             #if HOST
@@ -162,6 +184,23 @@ final class NativeTestHarness:NSObject,NSApplicationDelegate {
             setup.cancel(); setup.show()
             #else
             setup.stop(); setup.start()
+            #endif
+        case "remove-display":
+            #if HOST
+            do { try NativeSavedDisplay.remove(); setup.cancel(); setup.show() } catch { probe = "failed" }
+            #endif
+        case "restore-display":
+            #if HOST
+            setup.show(); if setup.stage == "approved" { setup.advance() }
+            #endif
+        case "dedicated-fixture":
+            #if HOST
+            if var binding = DeviceSettings.binding {
+                binding.dedicatedDisplay = true; binding.automaticLoginConfigured = true
+                binding.managementUsername = "original_administrator"; binding.username = "retinalinkdisplay"
+                binding.viewerStartup = true; binding.hostStartup = true
+                try? DeviceSettings.save(binding)
+            }
             #endif
         case "retry":
             #if HOST

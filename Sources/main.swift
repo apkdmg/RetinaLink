@@ -29,6 +29,12 @@ if LaunchOptions.has("--pairing-recovery-test") {
     guard DeviceSettings.nativeTestScope != nil else { fputs("An isolated native test scope is required.\n",stderr); exit(2) }
     do { try runPairingRecoveryTests(); exit(0) } catch { fputs("FAIL: \(error)\n",stderr); exit(1) }
 }
+#if HOST
+if LaunchOptions.has("--display-removal-test") {
+    guard DeviceSettings.nativeTestScope != nil else { fputs("An isolated native test scope is required.\n",stderr); exit(2) }
+    do { try runDisplayRemovalTests(); exit(0) } catch { fputs("FAIL: \(error)\n",stderr); exit(1) }
+}
+#endif
 if LaunchOptions.has("--native-test-harness") {
     guard DeviceSettings.nativeTestScope != nil else { exit(2) }
     let app = NSApplication.shared; app.setActivationPolicy(.regular)

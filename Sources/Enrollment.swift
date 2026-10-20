@@ -164,6 +164,11 @@ enum DeviceSettings {
     }
     static let bindingKey = "trustedDisplayBinding.v1"
     static var binding: DeviceBinding? {
+        #if HOST
+        // A durable removal record wins over an interrupted old/new binding
+        // write. Only explicit Add Display clears that record after saving.
+        guard defaults.object(forKey:NativeConnectionSettings.removedDisplayKey) == nil else { return nil }
+        #endif
         guard let data = defaults.data(forKey:bindingKey) else { return nil }
         return try? JSONDecoder().decode(DeviceBinding.self,from:data)
     }

@@ -36,7 +36,15 @@ If Viewer needs approval, choose **Reconnect Display…** on Host, select your i
 
 Viewer needs to be installed somewhere the person signing in can open it, normally `/Applications`. Each login keeps its approved connection privately in its own Keychain; a new login needs one approval before it can receive your desktop. There is no password or Remote Login step for this approval. Ordinary Viewer startup begins after sign-in, not before FileVault unlock.
 
-**Remove Display…** removes Host’s trust even when the iMac is offline. The unavailable Viewer cannot be cleaned remotely; use Viewer’s **Display → Reset Connection…** before approving it again. Reset affects that Viewer only. When connected, **Remove on Both Macs** additionally removes the current Viewer’s pairing and startup. Other logins' saved keys are not erased remotely, but cannot authenticate a Host after it removes the display key.
+### Remove a display and add it again
+
+**From 0.8.5 onward.** Choose **Remove Display…** on the display card in Host. Sharing stops and the saved display card is cleared. Its secure approval is kept so you can choose **Add Display → Add Display** on Host to use the same iMac again, even if Viewer is temporarily offline. No Viewer reset, code, password or click on the iMac is needed. When Viewer returns, it reconnects automatically. Restarting Host while the display is removed does not resume sharing.
+
+This also works in **Dedicated Display Mode**. The existing Viewer startup, automatic-login target, sleep/lock settings and FileVault stay unchanged. Host keeps the original Dedicated Display management information so removing the display does not lose the ability to manage that setup later. To use another iMac instead, choose **Set Up a Different Display…** and complete its normal initial approval.
+
+**Forget Display Approval…**, under **Connection Details**, is separate: it revokes this Host's saved key. Using that iMac afterward requires **Display → Reset Connection…** in Viewer and approval on both screens. Forgetting approval does not turn off Dedicated Display Mode or change FileVault, login or Viewer startup settings.
+
+**Published 0.8.4:** its older **Connection Details → Remove Display…** action revokes trust, so an offline Viewer needs **Reset Connection…** before pairing again. Connected **Remove on Both Macs** also removes the current Viewer's pairing and startup. Host-only removal and re-adding are available from 0.8.5.
 
 **If you are still using 0.8.3:** Sign back into the original iMac login, open Viewer and let it reconnect. Choose **Forget Display** on Host while connected. Quit and reopen Host, then open Viewer after the desired sign-in and pair using **Add Display**. Updating to 0.8.4 provides the simpler reconnect flow above.
 
@@ -52,7 +60,7 @@ Host provides these controls:
 - **Identify** helps you recognize the connected display.
 - **Disconnect** pauses the connection without removing pairing; **Connect** resumes it.
 - **Connection Details** shows connection status, display profiles and **Copy Diagnostics**.
-- **Remove Display…** deliberately removes pairing, including when the iMac is offline. Earlier versions call this **Forget Display…** and require the original Viewer to be connected. See [saved-display reconnection](#reconnect-your-saved-imac).
+- **Remove Display…** in 0.8.5 removes the display from your workspace while keeping approval for Host-only re-adding. **Forget Display Approval…** deliberately revokes that approval. Version 0.8.4 uses the older removal behavior. See [removing and re-adding](#remove-a-display-and-add-it-again).
 
 If the main Mac or connection becomes unavailable, Viewer keeps the iMac covered with a quiet fullscreen standby screen. It waits for the trusted Mac or network and retries automatically; it is not waiting for a Connect click. When the connection returns, the extended desktop replaces standby.
 

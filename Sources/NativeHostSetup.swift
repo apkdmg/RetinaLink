@@ -12,15 +12,18 @@ final class NativeHostSetup:NSObject,NSWindowDelegate {
     let viewerStartup = NSButton(checkboxWithTitle:"Open Viewer automatically after iMac sign-in",target:nil,action:nil)
     let hostStartup = NSButton(checkboxWithTitle:"Start Host automatically when this Mac signs in",target:nil,action:nil)
     var continueButton:NSButton!, cancelButton:NSButton!, codeCard:NSView?
+    var installationCard:NSView?, discoveryCard:NSView?, startupCard:NSView?, approvedCard:NSView?
     let discovery = NativeDiscovery()
     var found:[NativeDiscovery.Result] = []
     var targetPort = nativePairingPort
     private(set) var stage = "choose", verificationCode:String?
     var onPrepared:((DeviceBinding)->Void)?, onCompleted:((DeviceBinding)->Void)?
     private var prepared:DeviceBinding?, replacingBinding:DeviceBinding?
+    private var differentDisplay = false
     func show() {
         if let window = window {
-            if ["choose","existing","complete"].contains(stage) { configureStart() }
+            differentDisplay = false
+            if ["choose","existing","approved","complete"].contains(stage) { configureStart() }
             discovery.start(type:nativePairingType); window.makeKeyAndOrderFront(nil); return
         }
         address.placeholderString = "Old-iMac.local or iMac IP address"
@@ -32,12 +35,15 @@ final class NativeHostSetup:NSObject,NSWindowDelegate {
         let export = Design.button("Save Viewer Installer…",target:self,action:#selector(exportViewer))
         codeLabel.font = .monospacedDigitSystemFont(ofSize:38,weight:.semibold)
         codeCard = Design.card([Design.text("Compare on both Macs",14,.semibold),codeLabel,vaultNotice]); codeCard!.isHidden = true
+        installationCard = Design.card([Design.text("One time on your iMac",17,.semibold),
+            Design.text("Install RetinaLink Viewer in Applications and open it. You’ll approve this Mac on the iMac once. Remote Login is not required.",13,secondary:true),export])
+        discoveryCard = Design.card([Design.text("Find your display",17,.semibold),discovered,Design.formField("Or enter its local address",field:address)])
+        startupCard = Design.card([viewerStartup,hostStartup,
+            Design.text("Viewer starts after sign-in. FileVault may require a local disk unlock after a restart; it is never disabled.",12,secondary:true)])
+        approvedCard = Design.card([Design.message("Already approved on this Mac",detail:"Add your iMac again without a code, password or click on Viewer. Your previous startup and Dedicated Display settings are kept.",symbol:"checkmark.shield"),
+            Design.button("Set Up a Different Display…",target:self,action:#selector(chooseDifferentDisplay))])
         let body = Design.vertical([horizontal([Design.symbol("display.2",size:30),Design.text("Add Display",14,.semibold)]),heading,detail,
-            Design.card([Design.text("One time on your iMac",17,.semibold),
-                Design.text("Install RetinaLink Viewer in Applications and open it. You’ll approve this Mac on the iMac once. Remote Login is not required.",13,secondary:true),export]),
-            Design.card([Design.text("Find your display",17,.semibold),discovered,Design.formField("Or enter its local address",field:address)]),
-            codeCard!,Design.card([viewerStartup,hostStartup,
-                Design.text("Viewer starts after sign-in. FileVault may require a local disk unlock after a restart; it is never disabled.",12,secondary:true)]),result],spacing:18)
+            installationCard!,discoveryCard!,codeCard!,startupCard!,approvedCard!,result],spacing:18)
         for view in body.arrangedSubviews where view is NSVisualEffectView {
             view.widthAnchor.constraint(equalTo:body.widthAnchor).isActive = true
         }
@@ -65,8 +71,18 @@ final class NativeHostSetup:NSObject,NSWindowDelegate {
                 heading.stringValue = "Reconnect \(binding.viewerName)"
                 result.stringValue = "Open Viewer on your iMac. If it needs approval, confirm the matching number on both Macs. Your display stays saved."
             }
-        } else { result.stringValue = "Approve your iMac once. It reconnects automatically; Remote Login is not needed." }
+        } else if !differentDisplay, let approval = NativeSavedDisplay.removed {
+            stage = "approved"; continueButton.title = "Add Display"
+            heading.stringValue = "Add \(approval.binding.viewerName) again?"
+            detail.stringValue = "This iMac is already approved for your Mac. No action is needed on the iMac."
+            result.stringValue = "Choose Add Display. It reconnects when available; Dedicated Display Mode, FileVault and login settings are kept."
+            address.stringValue = approval.binding.address
+        } else { result.stringValue = differentDisplay ? "Approving a different display replaces the previous display’s approval on this Mac." : "Approve your iMac once. It reconnects automatically; Remote Login is not needed." }
+        let approved = stage == "approved"
+        for card in [installationCard,discoveryCard,startupCard] { card?.isHidden = approved }
+        approvedCard?.isHidden = !approved
     }
+    @objc func chooseDifferentDisplay() { differentDisplay = true; configureStart() }
     // Called only after local confirmation (or the UUID-isolated test harness).
     func beginReconnect() {
         guard let binding = DeviceSettings.binding, NativePendingSetup.viewerID == nil else { configureStart(); return }
@@ -85,6 +101,17 @@ final class NativeHostSetup:NSObject,NSWindowDelegate {
     }
     @objc func advance() {
         if stage == "complete" { window?.close(); return }
+        if stage == "approved" {
+            do {
+                let binding = try NativeSavedDisplay.restore()
+                stage = "complete"; heading.stringValue = "Your display is added."
+                detail.stringValue = "It reconnects automatically when your iMac is available."
+                result.stringValue = "Existing approval, Viewer startup, FileVault and login settings are kept."
+                continueButton.title = "Done"; onPrepared?(binding); onCompleted?(binding)
+                discovery.stop()
+            } catch { result.stringValue = String(describing:error) }
+            return
+        }
         if stage == "existing" { beginReconnect(); return }
         if stage == "verify" {
             session?.approve(); stage = "approving"; continueButton.isEnabled = false
@@ -137,6 +164,7 @@ final class NativeHostSetup:NSObject,NSWindowDelegate {
                         else { DeviceVault.remove(DeviceVault.credentialAccount) }
                         throw error
                     }
+                    NativeSavedDisplay.discardRemovedMetadata()
                     NativePendingSetup.begin(viewerID:peer.id,binding:request.binding)
                 }
                 NativeConnectionSettings.enable()

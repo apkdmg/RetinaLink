@@ -1,4 +1,6 @@
 import Foundation
+import AppKit
+import Network
 
 func runPairingRecoveryTests() throws {
     guard DeviceSettings.nativeTestScope != nil, DeviceVault.service.contains(".native-test.") else {
@@ -84,3 +86,83 @@ func runPairingRecoveryTests() throws {
     try check(!NativeConnectionSettings.requiresSetup,"Approved pairing could not clear the reset guard")
     print("PASS: unavailable-peer reset, failure preserves trust, idempotent deletion, stable identity and update preferences preserved; isolated Keychain only")
 }
+
+#if HOST
+func runDisplayRemovalTests() throws {
+    guard DeviceSettings.nativeTestScope != nil, DeviceVault.service.contains(".native-test.") else {
+        throw LinkError.invalid("Display removal tests require disposable preferences and Keychain.")
+    }
+    let defaults = DeviceSettings.defaults
+    defer {
+        DeviceVault.remove(DeviceVault.credentialAccount)
+        if let scope = DeviceSettings.nativeTestScope {
+            defaults.removePersistentDomain(forName:(Bundle.main.bundleIdentifier ?? "RetinaLink")+".NativeTest."+scope)
+        }
+    }
+    _ = NSApplication.shared
+    for dedicated in [false,true] {
+        var binding = DeviceBinding(hostID:DeviceSettings.hostID,hostName:"Studio",viewerName:"iMac",address:"127.0.0.1",
+            username:dedicated ? "retinalinkdisplay" : "owner",dedicatedDisplay:dedicated,viewerStartup:true,
+            hostStartup:true,fileVault:dedicated ? .off : .on,automaticLoginConfigured:dedicated,enrolledAt:Date(timeIntervalSince1970:100))
+        binding.managementUsername = dedicated ? "original_administrator" : nil
+        binding.viewerDeviceID = UUID().uuidString
+        let key = String(repeating:dedicated ? "B" : "A",count:32)
+        try DeviceVault.write(Data(key.utf8),account:DeviceVault.credentialAccount)
+        try DeviceSettings.save(binding); NativeConnectionSettings.enable()
+        defaults.set(false,forKey:"SUEnableAutomaticChecks")
+        try expectInvalid { try NativeSavedDisplay.remove { throw LinkError.invalid("Simulated locked test Keychain") } }
+        try check(DeviceSettings.binding == binding && NativeSavedDisplay.removed == nil,"Failed removal lost the active display")
+        NativePendingSetup.begin(viewerID:UUID().uuidString,binding:binding)
+        try NativeSavedDisplay.remove()
+        try check(DeviceSettings.binding == nil && NativeSavedDisplay.isRemoved && !NativeSavedDisplay.mayShareDesktop,
+                  "Removing the display did not disable desktop sharing")
+        try check(NativeSavedDisplay.removed?.binding == binding && (try DeviceVault.credential()) == key,
+                  "Removing the display changed its approval or Dedicated Mode metadata")
+        try check(NativeSavedDisplay.connectionBinding == binding && NativeConnectionSettings.enabled,
+                  "Offline removal lost authenticated automatic reconnection")
+        try check(NativePendingSetup.viewerID == nil,"Removal retained an unfinished setup")
+        // Simulate either side of an interrupted preferences transaction:
+        // removal persisted before clearing the old binding, or re-add saved
+        // its binding before clearing the removal record.
+        try DeviceSettings.save(binding)
+        try check(DeviceSettings.binding == nil && NativeSavedDisplay.isRemoved && !NativeSavedDisplay.mayShareDesktop,
+                  "An interrupted write made a removed display active after restart")
+        // Exercise the actual capture entry point, including its retry action.
+        let host = HostApp(), peer = Link(NWConnection(host:"127.0.0.1",port:9,using:try networkParameters(key)))
+        host.link = peer
+        var captureAttempts = 0
+        host.makeCapture = { _ in captureAttempts += 1; throw LinkError.invalid("Capture must stay off") }
+        host.beginCapture(peer); host.waitingForPermission = true; host.retryCapture()
+        try check(captureAttempts == 0 && !host.startingCapture && host.startup == nil,
+                  "A removed display reached capture through reconnect/retry")
+        // Re-add through the same controller/button used by Host, without Viewer.
+        let setup = NativeHostSetup(); setup.show()
+        defer { setup.cancel() }
+        try check(setup.stage == "approved" && setup.continueButton.title == "Add Display" &&
+                  setup.installationCard?.isHidden == true && setup.discoveryCard?.isHidden == true,
+                  "Re-adding still asked for installation or Viewer interaction")
+        setup.chooseDifferentDisplay()
+        try check(setup.stage == "choose" && setup.discoveryCard?.isHidden == false && NativeSavedDisplay.removed?.binding == binding,
+                  "Choosing a different display discarded the previous approval before new consent")
+        setup.cancel(); setup.show()
+        var restored:DeviceBinding?
+        setup.onPrepared = { restored = $0 }; setup.advance()
+        try check(restored == binding && DeviceSettings.binding == binding && !NativeSavedDisplay.isRemoved,
+                  "Host-only re-add lost the saved display configuration")
+        try check(NativeSavedDisplay.mayShareDesktop && (try DeviceVault.credential()) == key &&
+                  !defaults.bool(forKey:"SUEnableAutomaticChecks"),"Re-add changed approval or update preferences")
+        try NativeSavedDisplay.remove()
+        try DeviceVault.write(Data(String(repeating:"C",count:32).utf8),account:DeviceVault.credentialAccount)
+        try expectInvalid { _ = try NativeSavedDisplay.restore() }
+        try check(NativeSavedDisplay.isRemoved && DeviceSettings.binding == nil,"Mismatched approval restored a removed display")
+        try NativeLocalPairing.forget()
+        try check(NativeSavedDisplay.removed == nil && (try DeviceVault.credential()) == nil && !NativeSavedDisplay.mayShareDesktop,
+                  "Full revocation retained removable approval")
+        print("PASS: \(dedicated ? "dedicated" : "ordinary") display: offline removal, capture/retry blocked, Host-only re-add, configuration retained and full revocation")
+    }
+    defaults.set(Data("corrupt".utf8),forKey:NativeConnectionSettings.removedDisplayKey)
+    NativeConnectionSettings.enable()
+    try check(NativeSavedDisplay.isRemoved && !NativeSavedDisplay.mayShareDesktop,"Corrupt removal metadata enabled desktop sharing")
+    print("PASS: stale/malformed approvals fail closed; no production pairing, startup or OS settings accessed")
+}
+#endif

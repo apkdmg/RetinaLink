@@ -6,9 +6,9 @@ Use an older Retina iMac as a second display for your Apple silicon Mac. Put you
 
 Install **Host** on your main Mac and **Viewer** on the iMac. Approve the connection once, then manage everyday use from Host. Viewer opens fullscreen and reconnects automatically.
 
-**[Download Host for your main Mac](https://github.com/apkdmg/RetinaLink/releases/download/v0.8.4/RetinaLink-Host-0.8.4.pkg)** · **[Download Viewer for your iMac](https://github.com/apkdmg/RetinaLink/releases/download/v0.8.4/RetinaLink-Viewer-0.8.4.dmg)**
+**[Download Host for your main Mac](https://github.com/apkdmg/RetinaLink/releases/download/v0.8.5/RetinaLink-Host-0.8.5.pkg)** · **[Download Viewer for your iMac](https://github.com/apkdmg/RetinaLink/releases/download/v0.8.5/RetinaLink-Viewer-0.8.5.dmg)**
 
-Current release: **0.8.4** · [Release notes](https://github.com/apkdmg/RetinaLink/releases/tag/v0.8.4) · [User guide](USER_GUIDE.md) · [Compare alternatives](COMPARISON.md)
+Current release: **0.8.5** · [Release notes](https://github.com/apkdmg/RetinaLink/releases/tag/v0.8.5) · [User guide](USER_GUIDE.md) · [Compare alternatives](COMPARISON.md)
 
 ## Why RetinaLink?
 
@@ -47,7 +47,7 @@ Viewer starts fullscreen after sign-in and reconnects to your trusted Mac. If th
 
 **After an iMac restart:** FileVault may require someone to unlock it before Viewer can start. RetinaLink explains this during setup and leaves encryption unchanged. Optional dedicated-display setup is available for suitable retired iMacs; [read the automatic-login tradeoffs first](USER_GUIDE.md#using-a-retired-imac-as-a-dedicated-display).
 
-**Already using 0.8.2 or earlier?** Install Viewer 0.8.4 once to enable updates through Host without internet on the iMac. Host 0.8.1 or later can update itself with **Update Now…**; Host 0.8.0 or earlier also needs one replacement. Keep each app in its existing location and retain its saved pairing. The Host PKG installs to `/Applications`; it does not replace a copy in your home Applications folder. See [updating an existing installation](USER_GUIDE.md#updating-retinalink).
+**Already using 0.8.2 or earlier?** Install Viewer 0.8.5 once to enable updates through Host without internet on the iMac. Host 0.8.1 or later can update itself with **Update Now…**; Host 0.8.0 or earlier also needs one replacement. Keep each app in its existing location and retain its saved pairing. The Host PKG installs to `/Applications`; it does not replace a copy in your home Applications folder. See [updating an existing installation](USER_GUIDE.md#updating-retinalink).
 
 ## Choose a connection
 

@@ -242,7 +242,12 @@ final class ViewerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
                     DispatchQueue.main.async {
                         guard let self = self, self.link === peer else { return }
                         if command == "paused" { self.paused = true; self.showStandby("Display paused",detail:"Choose Connect in RetinaLink on your main Mac to resume.",phase:"paused") }
-                        if command == "resume" { self.paused = false; self.showStandby("Preparing your desktop…",detail:"Your display is connected securely.",phase:"connected") }
+                        if command == "removed" {
+                            self.paused = true
+                            self.display?.isHidden = true
+                            self.showStandby("Ready to add again.",detail:"Choose Add Display in RetinaLink on your main Mac. Your approval and login settings are kept.",phase:"removed")
+                        }
+                        if command == "resume" { self.paused = false; self.display?.isHidden = false; self.showStandby("Preparing your desktop…",detail:"Your display is connected securely.",phase:"connected") }
                         if command == "identify" {
                             self.window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps:true)
                             self.titleText.stringValue = binding?.viewerName ?? "Your iMac"; self.subtitle.stringValue = "Your RetinaLink display"

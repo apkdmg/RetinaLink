@@ -302,7 +302,7 @@ final class HostApp: NSObject, NSApplicationDelegate {
     var nativeSetupController:NativeHostSetup?
     let recoveryDiscovery = NativeDiscovery()
     var reconnectCandidate:NativeDiscovery.Result?
-    var addDisplayButton:NSButton?
+    var addDisplayButton:NSButton?, removeDisplayButton:NSButton?
     var forgettingNative = false
     var homeTimer: Timer?, statusItem: NSStatusItem?
     var windowLifecycle: HostWindowLifecycle?
@@ -340,7 +340,7 @@ final class HostApp: NSObject, NSApplicationDelegate {
         if UpdateSettings.returnToStartupAgentIfNeeded() { return }
         do { trustedCredential = try DeviceVault.credential() }
         catch { DiagnosticLog.shared.record("state",String(describing:error)); connectionNote.stringValue = String(describing:error) }
-        reconnectEnabled = DeviceSettings.binding != nil && trustedCredential != nil
+        reconnectEnabled = NativeSavedDisplay.connectionBinding != nil && trustedCredential != nil
         shortCode = savedShortCode(UserDefaults.standard.string(forKey:"hostShortCode")) { UserDefaults.standard.set($0,forKey:"hostShortCode") }
         pairingMode.addItems(withTitles:PairingMode.allCases.map(\.title))
         pairingMode.selectItem(at:(PairingMode(rawValue:UserDefaults.standard.integer(forKey:"pairingMode")) ?? .shortCode).rawValue)
@@ -375,9 +375,10 @@ final class HostApp: NSObject, NSApplicationDelegate {
         let title = horizontal([Design.symbol("display.2",size:27),Design.text("RetinaLink",19,.semibold)])
         let artwork = MonitorArtwork(); artwork.widthAnchor.constraint(equalToConstant:230).isActive = true; artwork.heightAnchor.constraint(equalToConstant:145).isActive = true
         let information = Design.vertical([displayName,displaySubtitle,homeStatus,connectionNote],spacing:10)
+        let remove = Design.button("Remove Display…",target:self,action:#selector(removeSavedDisplay)); removeDisplayButton = remove
         let hero = Design.card([horizontal([artwork,information]),horizontal([
             Design.button("Arrange Displays",target:self,action:#selector(arrange)),
-            Design.button("Identify",target:self,action:#selector(identify)),button])],padding:25)
+            Design.button("Identify",target:self,action:#selector(identify)),button,remove])],padding:25)
         let add = Design.button("Add Display",target:self,action:#selector(addDisplay),primary:true); addDisplayButton = add
         let spacer = NSView(); spacer.setContentHuggingPriority(.defaultLow,for:.horizontal)
         let heading = horizontal([Design.vertical([Design.text("Your displays",30,.bold),Design.text("Set up once. Connect effortlessly.",14,secondary:true)],spacing:7),spacer,add])
@@ -386,7 +387,7 @@ final class HostApp: NSObject, NSApplicationDelegate {
         updateButton = Design.button("Update Display Software…",target:self,action:#selector(updateViewerSoftware))
         let details = Design.card([Design.text("Connection details",17,.semibold),Design.text("Native 5K at a target of 60 updates/s. Actual performance depends on capture and network conditions.",12,secondary:true),status,profiles,stats,updateButton!,
             horizontal([Design.button("Copy Diagnostics",target:self,action:#selector(copyDiagnostics)),retryCaptureButton]),
-            Design.button("Remove Display…",target:self,action:#selector(forgetDisplay)),
+            Design.button("Forget Display Approval…",target:self,action:#selector(forgetDisplay)),
             Design.text("Legacy connection",13,.semibold),horizontal([pairingMode,copyCodeButton,newCodeButton]),pairing,pairingNote,addresses])
         details.isHidden = true; advanced = details
         stats.font = .monospacedSystemFont(ofSize:11,weight:.regular)
@@ -412,6 +413,7 @@ final class HostApp: NSObject, NSApplicationDelegate {
         consumeTestCommand()
         updateButton?.isEnabled = !updatingViewer && DeviceSettings.binding != nil && trustedCredential != nil && DistributionTrust.team != nil
         addDisplayButton?.title = DeviceSettings.binding == nil ? "Add Display" : "Manage Display…"
+        removeDisplayButton?.isHidden = DeviceSettings.binding == nil
         if let binding = DeviceSettings.binding {
             displayName.stringValue = binding.viewerName
             displaySubtitle.stringValue = displayPaused ? "Paused · still securely paired" : (capture == nil ? "Ready to connect · Native 5K" : "Extended desktop · Native 5K")
@@ -433,16 +435,23 @@ final class HostApp: NSObject, NSApplicationDelegate {
             }
             copyCodeButton?.isHidden = true; newCodeButton?.isHidden = true; pairingMode.isHidden = true
         } else {
+            displayName.stringValue = "A second life for your iMac."
             restartNote.stringValue = "Setup checks FileVault first and explains any restart limits. No disk changes or additional macOS installation."
-            displaySubtitle.stringValue = "Install Viewer on your iMac once, then choose Add Display. No Remote Login needed."
+            displaySubtitle.stringValue = NativeSavedDisplay.isRemoved ? "Display removed. Choose Add Display to use it again." : "Install Viewer on your iMac once, then choose Add Display. No Remote Login needed."
             button?.title = "Set Up Display"; button?.action = #selector(addDisplay)
-            if listener == nil && link == nil { homeStatus.stringValue = "Ready for setup from this Mac" }
+            if NativeSavedDisplay.isRemoved {
+                homeStatus.stringValue = "No desktop is shared · approval kept"
+                homeStatus.textColor = .secondaryLabelColor
+                restartNote.stringValue = "Viewer startup, Dedicated Display Mode, FileVault and login settings are unchanged."
+            } else if listener == nil && link == nil { homeStatus.stringValue = "Ready for setup from this Mac" }
         }
         if let path = LaunchOptions.value("--ui-state-path") ?? Optional(NSHomeDirectory()+"/Library/Logs/RetinaLink/Host-ui.json") {
             let state: [String:Any] = ["version":LaunchOptions.version,"build":LaunchOptions.build,"pid":ProcessInfo.processInfo.processIdentifier,"trusted":reconnectEnabled,"paused":displayPaused,"listening":listener != nil,"streaming":capture != nil && helloReceived,"setupStage":nativeSetupController?.stage ?? setupController?.stage ?? "closed","fileVault":DeviceSettings.binding?.fileVault.rawValue ?? "unknown","transport":NativeConnectionSettings.enabled ? "direct-tls" : "legacy-ssh","requiresRemoteLogin":!NativeConnectionSettings.enabled,"connectionID":link?.traceID ?? "","provisionalConnections":pending.count,"connectionPath":link.map { DirectLinkPath.metadata(connection:$0.connection) } ?? [:],"networkSettingsChanged":false,"time":Date().timeIntervalSince1970]
             var report = state; report["windowPresentation"] = windowLifecycle?.metadata ?? [:]
             report["viewerUpdateRelay"] = viewerSupportsRelay
             report["viewerUpdateRequested"] = viewerUpdateRequested
+            report["displayRemoved"] = NativeSavedDisplay.isRemoved
+            report["displaySaved"] = DeviceSettings.binding != nil
             if let update = viewerUpdateState, let data = try? JSONEncoder().encode(update),
                let value = try? JSONSerialization.jsonObject(with:data) { report["viewerUpdate"] = value }
             if let data = try? JSONSerialization.data(withJSONObject:report,options:.sortedKeys) { try? data.write(to:URL(fileURLWithPath:path),options:.atomic); try? FileManager.default.setAttributes([.posixPermissions:0o600],ofItemAtPath:path) }
@@ -466,6 +475,7 @@ final class HostApp: NSObject, NSApplicationDelegate {
         case "snapshot-setup": if let window = setupController?.window { Design.export(window,path:folder.appendingPathComponent("setup-ui.png").path) }
         case "forget": forgetConfirmed()
         case "forget-local": forgetOnThisMac()
+        case "remove-display": removeSavedDisplayConfirmed()
         case "reenroll": setupController?.window?.close(); setupController = nil; runAutomatedSetup()
         case "updates-check": checkUpdatesBoth(installNow:false)
         case "updates-install": checkUpdatesBoth(installNow:true)
@@ -551,29 +561,32 @@ final class HostApp: NSObject, NSApplicationDelegate {
     @objc func toggleDetails() { advanced?.isHidden.toggle() }
     @objc func arrange() { NSWorkspace.shared.open(URL(string:"x-apple.systempreferences:com.apple.Displays-Settings.extension")!) }
     @objc func identify() { link?.send(5,Data("identify".utf8)) }
-    @objc func forgetDisplay() {
+    @objc func removeSavedDisplay() {
         guard let binding = DeviceSettings.binding else { return }
-        let alert = NSAlert(); alert.alertStyle = .warning; alert.messageText = "Remove \(binding.viewerName)?"
-        let dedicated = binding.managementUsername != nil && binding.dedicatedDisplay
-        let online = link != nil && helloReceived
-        if dedicated {
-            alert.informativeText = "Dedicated Mode still controls automatic login to “\(binding.username)”. Use Dedicated Display Setup to restore ordinary login first. Forgetting only on this Mac removes Host’s trust but leaves the iMac’s account, startup and login settings as they are."
-            alert.addButton(withTitle:"Dedicated Display Setup…")
-        } else if NativeConnectionSettings.enabled && !online {
-            alert.informativeText = "Removing this display stops the connection and removes it from Host. If you add it again, choose Reset Connection in Viewer first. FileVault and login settings stay unchanged."
-            alert.addButton(withTitle:"Remove on This Mac")
-        } else {
-            alert.informativeText = "Forget on both Macs removes pairing and Viewer startup through the current connection. You can also remove only this Mac’s pairing if the original Viewer is unavailable. FileVault, accounts and login settings stay unchanged."
-            alert.addButton(withTitle:"Remove on Both Macs")
-        }
-        alert.addButton(withTitle:"Cancel")
-        if dedicated || online || !NativeConnectionSettings.enabled { alert.addButton(withTitle:"Remove on This Mac Only") }
-        let response = alert.runModal()
-        if response == .alertThirdButtonReturn { forgetOnThisMac() }
-        else if response == .alertFirstButtonReturn {
-            if NativeConnectionSettings.enabled && !online && !dedicated { forgetOnThisMac() }
-            else { forgetConfirmed() }
-        }
+        let alert = NSAlert(); alert.messageText = "Remove \(binding.viewerName)?"
+        alert.informativeText = "Stops sharing and removes this display from your workspace. Its secure approval is kept, so you can add it again entirely from this Mac. Viewer startup, Dedicated Display Mode, FileVault and login settings stay unchanged."
+        alert.addButton(withTitle:"Remove Display"); alert.addButton(withTitle:"Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        removeSavedDisplayConfirmed()
+    }
+    func removeSavedDisplayConfirmed() {
+        nativeSetupController?.cancel(); nativeSetupController = nil
+        do { try NativeSavedDisplay.remove() }
+        catch { connectionNote.stringValue = String(describing:error); return }
+        recoveryDiscovery.stop(); reconnectCandidate = nil
+        connectionNote.stringValue = "Removed. Choose Add Display to reconnect without visiting the iMac."
+        // Keep only authenticated standby available. A reconnect, launch item,
+        // Resume command or capture retry cannot share a removed display.
+        stop(message:"Display removed. No desktop is being shared.")
+        refreshHome()
+    }
+    @objc func forgetDisplay() {
+        guard let binding = NativeSavedDisplay.connectionBinding else { return }
+        let alert = NSAlert(); alert.alertStyle = .warning
+        alert.messageText = "Forget approval for \(binding.viewerName)?"
+        alert.informativeText = "Revokes this Mac’s saved approval. Adding this iMac again will require Reset Connection in Viewer and approval on both Macs. To remove a display and add it again entirely from Host, use Remove Display instead. Viewer startup, Dedicated Display Mode, FileVault and login settings stay unchanged."
+        alert.addButton(withTitle:"Forget Approval"); alert.addButton(withTitle:"Cancel")
+        if alert.runModal() == .alertFirstButtonReturn { forgetOnThisMac() }
     }
     func forgetOnThisMac(viewerConfirmed:Bool = false) {
         do { try NativeLocalPairing.forget() }
@@ -730,7 +743,7 @@ final class HostApp: NSObject, NSApplicationDelegate {
             status.stringValue = "Display forgotten. Choose Add Display to approve a new pairing."
             refreshHome(); return
         }
-        guard DeviceSettings.binding == nil || trustedCredential != nil else {
+        guard NativeSavedDisplay.connectionBinding == nil || trustedCredential != nil else {
             status.stringValue = "Device trust is unavailable. Finish Display Setup to restore this connection."
             // A locked/missing Keychain entry must never fall back to a weak
             // legacy code for a display that was already enrolled securely.
@@ -820,7 +833,12 @@ final class HostApp: NSObject, NSApplicationDelegate {
                                 self.viewerUpdateNote.stringValue = "iMac: installed \(hello.appVersion ?? "") (\(build)) · reconnecting display…"
                             } else { self.sendUpdateCommand(SoftwareUpdateCommand(action:"install")) }
                         }
-                        if self.displayPaused { peer.send(5,Data("paused".utf8)); self.status.stringValue = "Display paused · securely paired" }
+                        if NativeSavedDisplay.isRemoved {
+                            // Older approved Viewers understand paused; newer
+                            // ones provide the more specific removed standby.
+                            peer.send(5,Data("paused".utf8)); peer.send(5,Data("removed".utf8))
+                            self.status.stringValue = "Display removed · approved standby"
+                        } else if self.displayPaused { peer.send(5,Data("paused".utf8)); self.status.stringValue = "Display paused · securely paired" }
                         else { self.beginCapture(peer) }
                     } catch { self.stop(message:String(describing:error)) }
                 } else if type == 7, self.helloReceived, self.trustedCredential != nil, data.count < 4096 {
@@ -845,7 +863,7 @@ final class HostApp: NSObject, NSApplicationDelegate {
         peer.start()
     }
     func beginCapture(_ peer: Link) {
-        guard !startingCapture, !stopping, link === peer else { return }
+        guard NativeSavedDisplay.mayShareDesktop, !startingCapture, !stopping, link === peer else { return }
         startingCapture = true; waitingForPermission = false; retryCaptureButton?.isEnabled = false
         status.stringValue = "Starting capture · waiting for macOS authorization if needed…"
         recentDiagnostics.removeAll()
@@ -854,6 +872,8 @@ final class HostApp: NSObject, NSApplicationDelegate {
             guard let self = self, let peer = peer else { return }
             var attemptedSession: CaptureSession?
             do {
+                try Task.checkCancellation()
+                guard NativeSavedDisplay.mayShareDesktop else { throw CancellationError() }
                 let session = try self.makeCapture(peer); self.capture = session
                 session.frameLimit = self.frameLimit
                 session.parallelPacking = self.parallelPacking

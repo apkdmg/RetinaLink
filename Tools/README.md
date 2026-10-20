@@ -2,6 +2,15 @@
 
 ## Account-change and offline-forget regression tests
 
+For 0.8.5 and later, run **Host-only workspace removal and re-add** with disposable preferences and Keychain entries:
+
+```sh
+python3 Tools/test_display_removal.py --apps /absolute/build/apps \
+  --output /absolute/new-removal-output
+```
+
+It verifies ordinary and Dedicated Mode metadata, TLS standby while removed, Host relaunch remaining removed, re-adding from Host while Viewer is offline, and automatic Viewer return with the same approval/binding. This exercises actual AppKit setup and TCP/TLS test fixtures; it does not record or stream the desktop. The Host executable's `--display-removal-test --native-test-harness --native-test-scope UUID` additionally exercises the actual capture/retry entry points while removed, failed Keychain access, stale/corrupt retained approvals, choosing another display, and full approval revocation. The UI capture helper must remain off. Optional SSH arguments connect to an explicitly prepared bounded bridge in an already active dedicated login; they never grant root access or change login settings themselves.
+
 Build the development apps, then run the actual AppKit setup flow with disposable Host and Viewer preferences and Keychain namespaces:
 
 ```sh
