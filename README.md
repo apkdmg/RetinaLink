@@ -6,9 +6,9 @@ Use an older Retina iMac as a second display for your Apple silicon Mac. Put you
 
 Install **Host** on your main Mac and **Viewer** on the iMac. Approve the connection once, then manage everyday use from Host. Viewer opens fullscreen and reconnects automatically.
 
-**[Download Host for your main Mac](https://github.com/apkdmg/RetinaLink/releases/download/v0.8.6/RetinaLink-Host-0.8.6.pkg)** · **[Download Viewer for your iMac](https://github.com/apkdmg/RetinaLink/releases/download/v0.8.6/RetinaLink-Viewer-0.8.6.dmg)**
+**[Download Host for your main Mac](https://github.com/apkdmg/RetinaLink/releases/download/v0.8.8/RetinaLink-Host-0.8.8.pkg)** · **[Download Viewer for your iMac](https://github.com/apkdmg/RetinaLink/releases/download/v0.8.8/RetinaLink-Viewer-0.8.8.dmg)**
 
-Current release: **0.8.6** · [Release notes](https://github.com/apkdmg/RetinaLink/releases/tag/v0.8.6) · [User guide](USER_GUIDE.md) · [Compare alternatives](COMPARISON.md)
+Current release: **0.8.8** · [Release notes](https://github.com/apkdmg/RetinaLink/releases/tag/v0.8.8) · [User guide](USER_GUIDE.md) · [Compare alternatives](COMPARISON.md)
 
 ## Why RetinaLink?
 
@@ -20,6 +20,8 @@ Current release: **0.8.6** · [Release notes](https://github.com/apkdmg/RetinaLi
 - **Choose your connection.** Use Ethernet, or direct USB on supported setups, without a proprietary display dongle. RetinaLink discovers available connections automatically.
 - **Keep control of your Macs.** Standard setup leaves FileVault and network settings unchanged. Connections are encrypted; normal installation and pairing do not require Remote Login.
 - **Free and open source.** Use the signed, Apple-notarized apps, or inspect and modify the source under GNU GPLv3.
+
+**What changed in 0.8.8:** Adaptive compression reduces bytes without adding image loss. In matched USB 3 tests, full-screen 5K motion improved from 25.5 to 35.3 delivered updates/s; moving-window and scrolling-text scenes stayed near 60. These count Viewer GPU-completion acknowledgements, not independently measured panel frames. See [measurements and test limits](VALIDATION.md).
 
 **What to expect:** Native 5K is supported, but stable 60 fps across workloads and the latency of a directly connected monitor are not established. Performance depends on the connection, Macs and screen content. See [current limitations](#current-limitations).
 
@@ -47,7 +49,7 @@ Viewer starts fullscreen after sign-in and reconnects to your trusted Mac. If th
 
 **After an iMac restart:** FileVault may require someone to unlock it before Viewer can start. RetinaLink explains this during setup and leaves encryption unchanged. Optional dedicated-display setup is available for suitable retired iMacs; [read the automatic-login tradeoffs first](USER_GUIDE.md#using-a-retired-imac-as-a-dedicated-display).
 
-**Already using 0.8.2 or earlier?** Install Viewer 0.8.6 once to enable updates through Host without internet on the iMac. Host 0.8.1 or later can update itself with **Update Now…**; Host 0.8.0 or earlier also needs one replacement. Keep each app in its existing location and retain its saved pairing. The Host PKG installs to `/Applications`; it does not replace a copy in your home Applications folder. See [updating an existing installation](USER_GUIDE.md#updating-retinalink).
+**Already using 0.8.2 or earlier?** Install Viewer 0.8.8 once to enable updates through Host without internet on the iMac. Host 0.8.1 or later can update itself with **Update Now…**; Host 0.8.0 or earlier also needs one replacement. Keep each app in its existing location and retain its saved pairing. The Host PKG installs to `/Applications`; it does not replace a copy in your home Applications folder. See [updating an existing installation](USER_GUIDE.md#updating-retinalink).
 
 ## Choose a connection
 
@@ -55,7 +57,7 @@ Viewer starts fullscreen after sign-in and reconnects to your trusted Mac. If th
 | --- | --- | --- |
 | **Ethernet through your network** | Both Macs connect to your existing LAN. | The simplest place to start. Bandwidth depends on the entire network path. |
 | **Direct Ethernet** | A cable joins the Macs; a USB Ethernet adapter can provide a spare port. | Automatic discovery is implemented. The intended adapter-and-cable setup still needs its physical hardware test. |
-| **Direct USB-C to USB-A** | A rear Studio USB-C port connects directly to USB-A on a supported Intel iMac. | The tested cable ran at USB 2 speed. USB 3 operation and stable 5K60 over USB remain unverified. |
+| **Direct USB-C to USB-A** | A rear Studio USB-C port connects directly to USB-A on a supported Intel iMac. | USB 3 SuperSpeed is tested. Delivered updates remain workload-dependent: about 35/s for full-screen motion and 59–60/s for the tested desktop scenes. |
 
 RetinaLink uses existing automatic addresses; normal cable setup needs no typed IP address or network-setting changes. Cable compatibility and company policies still matter. See the [connection guide](USER_GUIDE.md#choosing-a-connection).
 

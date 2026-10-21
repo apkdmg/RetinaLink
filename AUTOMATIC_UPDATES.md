@@ -28,12 +28,12 @@ Host reports downloading, transfer, verification and installation separately. It
 
 ## GitHub hosting
 
-The public repository is configured as `apkdmg/RetinaLink`. Version 0.8.1 introduced these pinned public feeds. Release **0.8.6 build 73** uses the same addresses and signing key:
+The public repository is configured as `apkdmg/RetinaLink`. Version 0.8.1 introduced these pinned public feeds. Release **0.8.8 build 76** uses the same addresses and signing key:
 
 - Host: `https://apkdmg.github.io/RetinaLink/updates/host/appcast.xml`
 - Viewer: `https://apkdmg.github.io/RetinaLink/updates/viewer/appcast.xml`
 
-GitHub Pages serves only the signed XML and the `.nojekyll` marker. Versioned GitHub Releases serve the notarized role-specific ZIP archives, Host PKG, Viewer DMG and matching corresponding source archive. Release v0.8.6 is public: anonymous downloads of its six assets and both feeds match their planned hashes, and feed/archive signatures verify. Host 0.8.1 and later can acquire build 73 using **Update Now…**. Viewer 0.8.1/0.8.2 needs its own internet connection for that initial update, or one signed replacement at its existing path. After 0.8.3 is installed on both ends, only Host needs outbound HTTPS; Viewer uses the authenticated display connection. The Studio and dedicated Big Sur iMac also passed an actual public-feed build 65 → 67 update, with pairing retained. The checks and installed-version boundary are recorded in [VALIDATION.md](VALIDATION.md).
+GitHub Pages serves only the signed XML and the `.nojekyll` marker. Versioned GitHub Releases serve the notarized role-specific ZIP archives, Host PKG, Viewer DMG and matching corresponding source archive. Release v0.8.8 is public: anonymous downloads of its six assets and both feeds match their planned hashes, and feed/archive signatures verify. Host 0.8.1 and later can acquire build 76 using **Update Now…**. Viewer 0.8.1/0.8.2 needs its own internet connection for that initial update, or one signed replacement at its existing path. After 0.8.3 is installed on both ends, only Host needs outbound HTTPS; Viewer uses the authenticated display connection. The Studio and dedicated Big Sur iMac also passed an actual public-feed build 65 → 67 update, with pairing retained. The checks and installed-version boundary are recorded in [VALIDATION.md](VALIDATION.md).
 
 The public Viewer 0.8.1/build 61 → 0.8.2/build 62 update was exercised on the dedicated Big Sur iMac with Studio Host 0.8.2. Host's Update Now action triggered the real signed download and installation; Viewer relaunched and reconnected fullscreen without re-pairing or local interaction. Pairing, startup, login/power settings, FileVault and network configuration were preserved. This test covers the Viewer update with Host already at 0.8.2, rather than simultaneous installation on both Macs. See [the hardware-test record](VALIDATION.md#public-viewer-update-verified-on-the-dedicated-imac--19-october-2026).
 
@@ -42,12 +42,12 @@ The public Viewer 0.8.1/build 61 → 0.8.2/build 62 update was exercised on the 
 Signing and notarization happen on the developer's Mac using the existing Keychain identities. GitHub does not receive Developer ID private keys, update-signing keys, notarization passwords or pairing credentials. Network peers cannot replace the pinned public feed address. The repository and corresponding source are GNU GPLv3; the release preserves Sparkle's own notices.
 
 ```sh
-python3 Tools/release.py prepare --directory work/release-0.8.6-build73
-python3 Tools/release.py advance --directory work/release-0.8.6-build73
+python3 Tools/release.py prepare --directory work/release-0.8.8-build76
+python3 Tools/release.py advance --directory work/release-0.8.8-build76
 # Repeat advance after Apple processing, until complete.
-python3 Tools/release.py update-feed --directory work/release-0.8.6-build73 \
-  --updates-directory outputs/github-updates-0.8.6-build73 \
-  --archive-base-url https://github.com/apkdmg/RetinaLink/releases/download/v0.8.6
+python3 Tools/release.py update-feed --directory work/release-0.8.8-build76 \
+  --updates-directory outputs/github-updates-0.8.8-build76 \
+  --archive-base-url https://github.com/apkdmg/RetinaLink/releases/download/v0.8.8
 ```
 
 The last command creates `host/appcast.xml`, `viewer/appcast.xml` and separate notarized ZIPs for each role, signed with the Keychain update key. `--archive-base-url` supplies the flat versioned release-asset prefix before the appcast is signed; XML must never be rewritten afterward. It does not upload or publish. The normal same-origin role-directory layout remains available when the override is absent, including local tests.
@@ -62,20 +62,20 @@ Generate the GPL corresponding-source archive from the same full commit SHA. It 
 
 ```sh
 python3 Tools/source_archive.py --commit FULL_SOURCE_COMMIT \
-  --output outputs/github-release-0.8.6-build73/RetinaLink-0.8.6-source.tar.gz \
-  --manifest work/github-publication-0.8.6-build73/source-manifest.json
+  --output outputs/github-release-0.8.8-build76/RetinaLink-0.8.8-source.tar.gz \
+  --manifest work/github-publication-0.8.8-build76/source-manifest.json
 python3 Tools/publish_github.py plan \
-  --directory work/release-0.8.6-build73 \
-  --feeds outputs/github-updates-0.8.6-build73 \
-  --source-archive outputs/github-release-0.8.6-build73/RetinaLink-0.8.6-source.tar.gz \
-  --source-manifest work/github-publication-0.8.6-build73/source-manifest.json \
-  --asset outputs/RetinaLink-Host-0.8.6.pkg \
-  --asset outputs/RetinaLink-Viewer-0.8.6.dmg \
-  --plan work/github-publication-0.8.6-build73/plan.json
+  --directory work/release-0.8.8-build76 \
+  --feeds outputs/github-updates-0.8.8-build76 \
+  --source-archive outputs/github-release-0.8.8-build76/RetinaLink-0.8.8-source.tar.gz \
+  --source-manifest work/github-publication-0.8.8-build76/source-manifest.json \
+  --asset outputs/RetinaLink-Host-0.8.8.pkg \
+  --asset outputs/RetinaLink-Viewer-0.8.8.dmg \
+  --plan work/github-publication-0.8.8-build76/plan.json
 python3 Tools/publish_github.py publish \
-  --plan work/github-publication-0.8.6-build73/plan.json --gh /absolute/path/to/gh
+  --plan work/github-publication-0.8.8-build76/plan.json --gh /absolute/path/to/gh
 python3 Tools/publish_github.py verify \
-  --plan work/github-publication-0.8.6-build73/plan.json
+  --plan work/github-publication-0.8.8-build76/plan.json
 ```
 
 `plan` is local and records the exact source, signatures, URLs and SHA-256 digests. `publish` uses the authenticated GitHub CLI to resume or create a draft release, downloads every uploaded asset to verify its bytes, publishes the complete release, then deploys only the two signed feeds on `gh-pages`. It checks the existing Pages configuration and rejects older or conflicting feeds before publishing. Git pushes name only the intended tag or Pages branch and disable automatic following of other tags. The current source checkout and unrelated files are never checked out or rewritten for Pages.

@@ -1,6 +1,23 @@
-# Public release preparation — 0.8.8 build 76
+# Published 0.8.8 build 76 — 21 October 2026
 
-Build 76 prepares the tested build-75 compression and Viewer session changes for a clean-source public release. Application source is unchanged from the installed build-75 comparison below; only the build number advances so test installations can receive the public update. Public artifact, notarization and feed verification are recorded separately after publication. The measured performance results below belong to installed build 75.
+**[RetinaLink 0.8.8 is public](https://github.com/apkdmg/RetinaLink/releases/tag/v0.8.8).** Its six release assets and both signed public update feeds pass anonymous HTTPS size/SHA-256 verification; both appcast and update-archive signatures verify with the existing Sparkle identity. Host PKG, Viewer DMG, role-specific update ZIPs, matching GPLv3 source and checksums are available. The immutable release tag points to clean application commit `b2f00bd0f4bf8bde1bf6a9314e29ba03ba5f7147`.
+
+Build 76 contains the same application source as the installed build-75 compression comparison below, with an incremented build number so test installations can receive the public update. It includes the Viewer physical-session fix from the internal build-74 tests. The matching source archive includes the pinned Sparkle source and vendored dependencies; it excludes local test data and unrelated untracked files.
+
+The final notarized Host passes complete self-tests, including exact compression round trips and GPU upload checks. Both app roles pass session-state, pairing-recovery and wake-recovery checks; update-relay, saved-display, account-recovery and display-removal regressions pass. All **124 offline policy tests** pass when modules run in separate Python processes (aggregate discovery has an existing `test_usb_link` module-name collision). A first saved-display trial could not bind its fixed stream-test port because an unrelated Codex HTTPS connection occupied port 58582; the same checks pass using available ports 62281/62282. This was isolated test infrastructure, not a production reconnect failure.
+
+The exact stapled Viewer archive bundled in Host was copied to a disposable directory on the actual macOS 11.7.11 Radeon R9 M290X iMac. Signature, Gatekeeper, full self-tests and Viewer session tests pass. The disposable copy was removed. Publication did not replace either installed app; the performance evidence remains the build-75 hardware comparison below. Existing bundle identifiers, designated requirements, developer team, pairing namespace, updater keys/feeds and minimum OS versions match build 75. No new physical login/logout or panel-presentation measurement is claimed.
+
+Apple accepted and tickets were stapled for:
+
+| Artifact | Apple submission |
+| --- | --- |
+| Viewer app | `19bcb189-3f54-45f1-afe2-62e399292e78` |
+| Host app | `41d1e15b-7d66-4857-9ae7-96d47069f017` |
+| Host PKG | `56ddb9f4-ae8b-4b34-8b98-0cecadc257eb` |
+| Viewer DMG | `317a71e2-18b2-4fb9-8d76-8f37e8d1831a` |
+
+Installer verification checks the exact accepted app payload, bundled Viewer ticket, DMG layout and disposable drag-copy signature. Public asset hashes are in the release's `v0.8.8-SHA256SUMS`. Local publication evidence is in `work/github-publication-0.8.8-build76/`, including `release-validation.json`, `public-verification-final.json`, `public-feed-signatures.json`, final signed-app and actual-iMac logs. Accepted artifacts are in `work/release-0.8.8-build76/`, `work/pkg-0.8.8-build76/`, `work/dmg-0.8.8-build76-viewer/` and `outputs/`.
 
 # Lossless BC7 packing installed and measured — 21 October 2026 (0.8.8 build 75)
 
@@ -37,7 +54,7 @@ Encoding 3 retains the bounded four-chunk LZ4 envelope, applying independent mod
 
 The signed Host and actual Big Sur/Radeon iMac Viewer pass their complete self-tests, including all supported dimensions, partial bottom tiles, sparse/out-of-order IDs, retained/sliced buffers, legacy negotiation, adaptive/raw fallback, malformed metadata and existing GPU upload checks. ASan/UBSan pass every supported transform length with unaligned pointers and exact reconstruction. The isolated four-worker decoder benchmark on the iMac takes about 5.19 ms for LZ4 plus inverse transform versus 2.51 ms for LZ4 alone. The full live Host encode-and-pack cost remains about 11.3 ms in both conditions.
 
-After explicit user approval, Apple accepted Viewer submission `59991c5f-f2b9-408a-8420-665bf0211169` and Host submission `429c0f41-dce8-44e3-8201-5eebde45dd7d`. Both tickets are stapled and Gatekeeper-verified. The Viewer installed through the authenticated update relay from a signed loopback feed; Host was replaced at its permanent path with a verified signed copy and a retained build-74 backup. Existing pairing and fullscreen streaming were retained. No public release was published. Normal Host startup is restored with compression enabled, automatic updates remain on, and temporary update infrastructure is removed.
+After explicit user approval, Apple accepted Viewer submission `59991c5f-f2b9-408a-8420-665bf0211169` and Host submission `429c0f41-dce8-44e3-8201-5eebde45dd7d`. Both tickets are stapled and Gatekeeper-verified. The Viewer installed through the authenticated update relay from a signed loopback feed; Host was replaced at its permanent path with a verified signed copy and a retained build-74 backup. Existing pairing and fullscreen streaming were retained. No public release was published as part of these build-75 tests. Normal Host startup is restored with compression enabled, automatic updates remain on, and temporary update infrastructure is removed.
 
 Evidence: `work/compression-optimization/live-results.json`, `result.json`, signed self-test/sanitizer/fixture logs and `final-Host-ui.json`; the four valid `work/usb3-retest-20261021/compression75-{disabled,enabled,native-window,text-scroll}/` directories; signed/notarized artifacts in `work/release-0.8.8-build75/`. Exploratory prototype results are not production evidence; the evidence README identifies a discarded non-invertible prototype.
 

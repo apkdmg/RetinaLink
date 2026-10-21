@@ -86,7 +86,7 @@ Connect a data-capable cable directly from a **rear USB-C port on the Apple sili
 
 When macOS exposes the supported connection, RetinaLink detects it automatically and reuses the saved pairing. No IP address, new code or Remote Login setting is needed. If USB is disconnected, Viewer tries available network alternatives. When USB returns, it can switch back automatically. A switch between routes can briefly interrupt the picture.
 
-The working cable in testing negotiated **USB 2 at 480 Mbps** and produced approximately **29–39 rendered updates per second at native 5K** in the measured moving-window test. USB 3 operation and stable 5K60 over USB remain unverified. A cable's printed speed rating does not establish its actual negotiated speed. See [USB and Ethernet details](DIRECT_ETHERNET.md).
+The replacement cable tested on 21 October negotiated **USB 3 SuperSpeed at 5 Gbps**. Measured application throughput was about **2.87 Gbps**. With the 0.8.8 compression changes, native-5K full-screen motion improved from **25.5 to 35.3 delivered updates/s**, while the moving-window and scrolling-text tests stayed near **59–60 updates/s**. These are Viewer GPU-completion acknowledgements; stable physical 5K60 is not established. The earlier cable ran at USB 2 speed. A cable's printed rating does not establish its negotiated speed or usable throughput. See [USB and Ethernet details](DIRECT_ETHERNET.md) and [test evidence](VALIDATION.md).
 
 ## Updating RetinaLink
 
