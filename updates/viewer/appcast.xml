@@ -4,15 +4,15 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <channel>
         <title>RetinaLink Viewer</title>
         <item>
-            <title>0.8.6</title>
-            <pubDate>Wed, 21 Oct 2026 11:14:12 +0800</pubDate>
-            <sparkle:version>73</sparkle:version>
-            <sparkle:shortVersionString>0.8.6</sparkle:shortVersionString>
+            <title>0.8.8</title>
+            <pubDate>Wed, 21 Oct 2026 12:58:07 +0800</pubDate>
+            <sparkle:version>76</sparkle:version>
+            <sparkle:shortVersionString>0.8.8</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>10.15</sparkle:minimumSystemVersion>
-            <enclosure url="https://github.com/apkdmg/RetinaLink/releases/download/v0.8.6/RetinaLink-Viewer-0.8.6-73.zip" length="3654159" type="application/octet-stream" sparkle:edSignature="U7WhPt1uZGkCcCU+wbvYSPhzlY1KTi3KXkCWz8/eOxrGWTFfNm+xjz5ehZNPU6K8Fzsx8rfuCvGsIjX8BgmyDg=="></enclosure>
+            <enclosure url="https://github.com/apkdmg/RetinaLink/releases/download/v0.8.8/RetinaLink-Viewer-0.8.8-76.zip" length="3697027" type="application/octet-stream" sparkle:edSignature="wpq+e/0sjwQdo6oenr6uh3mKFxHxE3y4PoNb3tXfcMfEhC6bOX+KnCc1Aap47NOiyqDXTrCuYivn9mhCerL4DA=="></enclosure>
         </item>
     </channel>
 </rss><!-- sparkle-signatures:
-edSignature: uKBcresM6/VPpWK+OLKbqEfE6dH4nFhEfvLd/O+fq2IRJeUlT1FwL3hIMAB/u9OLE8N+LFRYZPhBZskm7UETAg==
+edSignature: p3RnVqqVR3SbtV2dAfXvbgwQPwwhDU/mnW90gljlabyicV6evaXJm8x1W2pWm1wsP5OYLgukqOSOhC+BTqNtCg==
 length: 1064
 -->
