@@ -81,6 +81,7 @@ func runSelfTests() throws {
     try check(retainedPackets==expectedPackets && reusablePacket==packed,"Reusable packer overwrote retained packets or changed encoding")
     print("PASS: reusable packing matches baseline packets and retains independent output across scratch-buffer reuse")
     try testChunkedPacking()
+    try testShuffledPacking()
     try check(decoded.sequence == 7 && decoded.tiles[0].bytes == bytes,"Frame round trip")
     let padded = Data([0xFF]) + packed
     for copy in [false,true] {

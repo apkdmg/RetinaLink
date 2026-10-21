@@ -64,8 +64,9 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
     var inFlight: [UInt64:Double] = [:], sequence: UInt64 = 0
     var frameLimit = 2
     var parallelPacking = false
+    var shuffledPacking = false
     var sentBytes = 0, delivered = 0, skipped = 0, lastStats = ProcessInfo.processInfo.systemUptime
-    var complete = 0, unchanged = 0, inactive = 0, encodes = 0
+    var complete = 0, unchanged = 0, inactive = 0, encodes = 0, shuffledFrames = 0
     var ackMS = 0.0, encodeMS = 0.0, active = false
     var sendMS = 0.0, sendCount = 0, ackDispatchMS = 0.0
     var maxACK=0.0, maxSend=0.0, maxACKDispatch=0.0
@@ -248,7 +249,8 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
             guard let frame = try encoder.encode(pixel,sequence:sequence+1,force:sequence == 0) else { unchanged += 1;FrameTrace.shared.event("encode_unchanged",fields:["capture_id":captureID]);return }
             FrameTrace.shared.event("encode_end",sequence:frame.sequence,fields:["gpu_ms":encoder.lastGPUms,"wait_ms":encoder.lastWaitMS,"gather_ms":encoder.lastGatherMS,"tiles":frame.tiles.count])
             let packStart = ProcessInfo.processInfo.systemUptime
-            let packet = try packer?.serialize(frame,parallel:parallelPacking) ?? frame.serialize(); encodeMS += (ProcessInfo.processInfo.systemUptime-start)*1000; encodes += 1
+            let packet = try packer?.serialize(frame,parallel:parallelPacking,shuffled:shuffledPacking) ?? frame.serialize(); encodeMS += (ProcessInfo.processInfo.systemUptime-start)*1000; encodes += 1
+            if packet.first == 3 {shuffledFrames += 1}
             gpuMS += encoder.lastGPUms; gpuWaitMS += encoder.lastWaitMS; gatherMS += encoder.lastGatherMS; packMS += (ProcessInfo.processInfo.systemUptime-packStart)*1000
             if encodeOnly {sequence += 1;FrameTrace.shared.event("discarded",sequence:sequence,fields:["bytes":packet.count]);return}
             sequence += 1; inFlight[sequence] = ProcessInfo.processInfo.systemUptime; sentBytes += packet.count
@@ -270,9 +272,9 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
         let probeText=probe.map {"\n"+$0.report()} ?? ""
         let tails=String(format:"\nWorst ms: acknowledgement %.1f · send processing %.1f · ACK dispatch %.1f",maxACK,maxSend,maxACKDispatch)
         let creditText=String(format:"\nCredit waits %d · ACK resumes %d · pending for credit %@",creditWaits,creditResumes,creditGate.waiting ? "yes":"no")
-        onStatus?(String(format:"%.1f delivered updates/s · %.1f Mbps · %d/%d frames in flight\nCapture %.1f/s · unchanged %d · backpressure skips %d · inactive %d\n",Double(delivered)/elapsed,Double(sentBytes)*8/elapsed/1e6,inFlight.count,frameLimit,Double(complete)/elapsed,unchanged,skipped,inactive) + timings + transport + tails + creditText + probeText)
+        onStatus?(String(format:"%.1f delivered updates/s · %.1f Mbps · %d/%d frames in flight\nCapture %.1f/s · unchanged %d · backpressure skips %d · inactive %d\n",Double(delivered)/elapsed,Double(sentBytes)*8/elapsed/1e6,inFlight.count,frameLimit,Double(complete)/elapsed,unchanged,skipped,inactive) + timings + transport + tails + creditText + "\nLossless shuffled frames \(shuffledFrames)/\(encodes)" + probeText)
         delivered = 0; sentBytes = 0; skipped = 0; lastStats = now
-        complete = 0; unchanged = 0; inactive = 0; encodes = 0; encodeMS = 0; ackMS = 0
+        complete = 0; unchanged = 0; inactive = 0; encodes = 0; shuffledFrames = 0; encodeMS = 0; ackMS = 0
         sendMS = 0; sendCount = 0; ackDispatchMS = 0
         maxACK=0;maxSend=0;maxACKDispatch=0
         creditWaits=0;creditResumes=0
@@ -285,6 +287,7 @@ final class HostApp: NSObject, NSApplicationDelegate {
     var startup: Task<Void,Never>?, helloReceived = false, stopping = false
     var frameLimit = 2
     var parallelPacking = false
+    var shuffledPacking = false
     var startingCapture = false, waitingForPermission = false
     var makeCapture: (Link) throws -> CaptureSession = { try CaptureSession(link:$0) }
     let profiles = NSPopUpButton()
@@ -806,6 +809,7 @@ final class HostApp: NSObject, NSApplicationDelegate {
                         guard hello.version == 1, hello.bc7 else { throw LinkError.invalid("Viewer does not support this protocol or GPU format") }
                         self.frameLimit = try hello.frameLimit(requested:Int(LaunchOptions.value("--frames-in-flight") ?? "3") ?? 3)
                         self.parallelPacking = hello.chunkedPacking == true && !LaunchOptions.has("--serial-packing")
+                        self.shuffledPacking = hello.shuffledPacking == true && !LaunchOptions.has("--no-shuffled-packing")
                         self.helloReceived = true
                         self.viewerSupportsUpdates = hello.automaticUpdates == true
                         self.viewerSupportsRelay = hello.updateRelay == UpdateRelayPolicy.version
@@ -877,6 +881,7 @@ final class HostApp: NSObject, NSApplicationDelegate {
                 let session = try self.makeCapture(peer); self.capture = session
                 session.frameLimit = self.frameLimit
                 session.parallelPacking = self.parallelPacking
+                session.shuffledPacking = self.shuffledPacking
                 attemptedSession = session
                 peer.setAcknowledgementHandler { [weak session] data in session?.acknowledge(data) }
                 peer.setSendTimingHandler { [weak session] type, milliseconds in

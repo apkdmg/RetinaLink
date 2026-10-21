@@ -33,10 +33,8 @@ final class ViewerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
     var intentionalHandoverConnectionID:String?
     var lastProbeResult:[String:Any] = [:]
     var sessionObservers:[NSObjectProtocol] = []
-    var sessionActive:Bool {
-        var console = stat()
-        return stat("/dev/console",&console) == 0 && console.st_uid == getuid()
-    }
+    var lastSessionActive:Bool?
+    var sessionActive:Bool { ViewerSessionState.current.active }
     func applicationDidFinishLaunching(_ notification: Notification) {
         installMenu(); addMaintenanceMenu()
         deviceName.stringValue = Host.current().localizedName ?? "iMac"
@@ -55,26 +53,15 @@ final class ViewerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         nativeSetup.onPaired = { [weak self] in self?.startNativeDiscovery(); self?.connect() }
         let center = NSWorkspace.shared.notificationCenter
         sessionObservers.append(center.addObserver(forName:NSWorkspace.sessionDidResignActiveNotification,object:nil,queue:.main) { [weak self] _ in
-            guard let self = self else { return }
-            self.nativeSetup.stop(); self.reconnect?.cancel(); self.reconnect = nil
-            self.routeProbe?.cancel(); self.routeProbe = nil
-            let previous = self.link; self.link = nil; previous?.cancel()
-            self.softwareUpdater.detachRelay(); self.activeCandidate = nil
-            self.connected = false; self.receivedFrame = false; self.activity = nil
-            self.statsTimer?.invalidate(); self.statsTimer = nil
-            self.display?.removeFromSuperview(); self.display = nil
-            self.showStandby("Waiting for sign-in…",detail:"Your display stays saved and reconnects automatically.",phase:"waiting")
+            self?.reconcileSession()
         })
         sessionObservers.append(center.addObserver(forName:NSWorkspace.sessionDidBecomeActiveNotification,object:nil,queue:.main) { [weak self] _ in
-            guard let self = self else { return }
-            self.reconnectPolicy.resumed()
-            if DeviceSettings.binding == nil { self.nativeSetup.start() } else { self.startNativeDiscovery() }
-            self.connect()
+            self?.reconcileSession()
         })
-        if DeviceSettings.binding == nil { nativeSetup.start() } else { startNativeDiscovery() }
+        reconcileSession()
         DiagnosticLog.shared.record("launch","Viewer appliance ready; fullscreen and automatic reconnection; UI capture helper unused")
         uiTimer = Timer.scheduledTimer(withTimeInterval:1,repeats:true) { [weak self] _ in
-            self?.consumeDirectLinkTestCommand(); self?.considerPreferredConnection(); self?.publishState()
+            self?.reconcileSession(); self?.consumeDirectLinkTestCommand(); self?.considerPreferredConnection(); self?.publishState()
         }
         NSWorkspace.shared.notificationCenter.addObserver(self,selector:#selector(woke),name:NSWorkspace.didWakeNotification,object:nil)
         if automatic { connect() }
@@ -86,6 +73,27 @@ final class ViewerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         // The Host announces relay support before starting the updater, so an
         // offline appliance does not begin a direct internet request on launch.
         if let path = LaunchOptions.value("--export-ui") { DispatchQueue.main.asyncAfter(deadline:.now()+1) { [weak self] in if let window = self?.window { Design.export(window,path:path) } } }
+    }
+    func reconcileSession() {
+        let state = ViewerSessionState.current
+        guard lastSessionActive != state.active else { return }
+        lastSessionActive = state.active
+        if let data = try? JSONSerialization.data(withJSONObject:state.metadata,options:.sortedKeys),
+           let text = String(data:data,encoding:.utf8) { DiagnosticLog.shared.record("session",text) }
+        if state.active {
+            reconnectPolicy.resumed()
+            if DeviceSettings.binding == nil { nativeSetup.start() } else { startNativeDiscovery() }
+            connect()
+        } else {
+            nativeSetup.stop(); reconnect?.cancel(); reconnect = nil
+            routeProbe?.cancel(); routeProbe = nil
+            let previous = link; link = nil; previous?.cancel()
+            softwareUpdater.detachRelay(); activeCandidate = nil
+            connected = false; receivedFrame = false; activity = nil
+            statsTimer?.invalidate(); statsTimer = nil
+            display?.removeFromSuperview(); display = nil
+            showStandby("Waiting for sign-in…",detail:"Your display stays saved and reconnects automatically.",phase:"waiting")
+        }
     }
     func makeStandbyWindow() {
         let screen = NSScreen.main, rect = desiredFullscreen ? (screen?.frame ?? NSRect(x:0,y:0,width:1280,height:720)) : NSRect(x:0,y:0,width:1060,height:680)
@@ -194,7 +202,7 @@ final class ViewerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
                         self.routePolicy.failed(candidate.key,now:ProcessInfo.processInfo.systemUptime)
                         peer.cancel(reason:"The selected \(candidate.label) route changed. Trying another connection…",cause:.transportFailure); return
                     }
-                    let hello = Hello(version:1,bc7:true,name:Host.current().localizedName ?? "iMac",maxFramesInFlight:3,chunkedPacking:true,appVersion:LaunchOptions.version,appBuild:LaunchOptions.build,automaticUpdates:true,updateRelay:UpdateRelayPolicy.version,directConnection:self.directConnection)
+                    let hello = Hello(version:1,bc7:true,name:Host.current().localizedName ?? "iMac",maxFramesInFlight:3,chunkedPacking:true,shuffledPacking:true,appVersion:LaunchOptions.version,appBuild:LaunchOptions.build,automaticUpdates:true,updateRelay:UpdateRelayPolicy.version,directConnection:self.directConnection)
                     if let data = try? JSONEncoder().encode(hello) { peer.send(1,data) }
                     if let candidate = candidate { self.routePolicy.succeeded(candidate.key) }
                     self.connected = true
@@ -422,11 +430,12 @@ final class ViewerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         guard let path = LaunchOptions.value("--ui-state-path") ?? Optional(NSHomeDirectory()+"/Library/Logs/RetinaLink/Viewer-ui.json") else { return }
         let full = window.map { window in window.screen.map { abs(window.frame.width-$0.frame.width)<2 && abs(window.frame.height-$0.frame.height)<2 } ?? false } ?? false
         let state: [String:Any] = ["version":LaunchOptions.version,"build":LaunchOptions.build,"pid":ProcessInfo.processInfo.processIdentifier,
+            "sessionActive":sessionActive,"windowServerSession":ViewerSessionState.current.metadata,
             "phase":phase,"connected":connected,"trusted":DeviceSettings.binding != nil,"fullscreen":full,
             "systemUIAutoHidden":NSApp.presentationOptions.contains(.autoHideDock) && NSApp.presentationOptions.contains(.autoHideMenuBar),
             "standbyVisible":standby?.isHidden == false,"automaticReconnect":automatic,"displayWindows":window == nil ? 0 : 1,
             "startupInstalled":FileManager.default.fileExists(atPath:StartupAgent.path(role:"Viewer").path),
-            "transport":directConnection ? "direct-tls" : "legacy", "requiresRemoteLogin":!directConnection,"connectionID":link?.traceID ?? "",
+            "transport":DeviceSettings.binding != nil && !LaunchOptions.has("--legacy-ssh-transport") ? "direct-tls" : "legacy", "requiresRemoteLogin":DeviceSettings.binding == nil || LaunchOptions.has("--legacy-ssh-transport"),"connectionID":link?.traceID ?? "",
             "connectionPath":link.map { DirectLinkPath.metadata(connection:$0.connection,candidate:activeCandidate) } ?? [:],
             "discoveredRoutes":routeCandidates.map(\.metadata),"lastPreferredRouteProbe":lastProbeResult,
             "time":Date().timeIntervalSince1970,"windowFrame":NSStringFromRect(window?.frame ?? .zero)]

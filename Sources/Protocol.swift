@@ -57,6 +57,7 @@ struct Hello: Codable {
     let name: String
     var maxFramesInFlight: Int? = nil
     var chunkedPacking: Bool? = nil
+    var shuffledPacking: Bool? = nil
     var appVersion: String? = nil
     var appBuild: String? = nil
     var automaticUpdates: Bool? = nil
@@ -103,12 +104,12 @@ struct Frame {
     static func parse(_ packet: Data, copyBuffers: Bool = LaunchOptions.has("--copy-frame-buffers")) throws -> Frame {
         var outer = Reader(data: packet)
         let encoding = try outer.bytes(1)[0], count = Int(try outer.u32()), encodedCount = Int(try outer.u32())
-        guard count >= 24, count <= maxPacket, encoding <= 2 else { throw LinkError.invalid("Invalid frame envelope") }
+        guard count >= 24, count <= maxPacket, encoding <= 3 else { throw LinkError.invalid("Invalid frame envelope") }
         guard encodedCount == packet.count-outer.offset else { throw LinkError.invalid("Truncated encoded frame") }
         let payload = try copyBuffers ? outer.bytes(packet.count - outer.offset) : outer.sliceBytes(packet.count - outer.offset)
         guard !payload.isEmpty else { throw LinkError.invalid("Missing frame payload") }
         let raw: Data
-        if encoding == 2 {
+        if encoding == 2 || encoding == 3 {
             // Validate every range before parallel workers touch disjoint output spans.
             var chunks = Reader(data:payload)
             let n = Int(try chunks.u32())
@@ -169,6 +170,7 @@ struct Frame {
             tiles.append(TileUpdate(id: id, bytes: bytes)) // BC7 = one byte/pixel.
         }
         guard r.atEnd else { throw LinkError.invalid("Trailing frame data") }
+        if encoding == 3 { tiles = BC7Packing.restore(tiles) }
         return Frame(sequence: sequence, width: width, height: height, keyframe: flags == 1, tiles: tiles)
     }
 }
@@ -187,20 +189,34 @@ final class FramePacker {
     private let scratch = UnsafeMutableRawPointer.allocate(byteCount:max(1,compression_encode_scratch_buffer_size(COMPRESSION_LZ4)),alignment:16)
     private var workers:[Worker] = []
     deinit { raw.deallocate(); packed.deallocate(); scratch.deallocate() }
-    func serialize(_ frame: Frame, parallel:Bool=false) throws -> Data {
+    func serialize(_ frame: Frame, parallel:Bool=false, shuffled:Bool=false) throws -> Data {
         var count = 24
         for tile in frame.tiles {
             guard tile.bytes.count <= maxPacket-count-4 else {throw LinkError.invalid("Frame packing capacity exceeded")}
             count += 4+tile.bytes.count
         }
+        // The capability is optional. Small/easily compressed desktop updates
+        // retain the original format and avoid the transform's CPU cost.
+        let transform = parallel && shuffled && count >= 1024*1024 && BC7Packing.shouldTransform(frame.tiles)
+        var tileOffsets:[Int] = []
         var offset = 0
         func put32(_ x:UInt32) {raw.storeBytes(of:x.bigEndian,toByteOffset:offset,as:UInt32.self);offset += 4}
         func put64(_ x:UInt64) {raw.storeBytes(of:x.bigEndian,toByteOffset:offset,as:UInt64.self);offset += 8}
         put64(frame.sequence);put32(UInt32(frame.width));put32(UInt32(frame.height));put32(frame.keyframe ? 1:0);put32(UInt32(frame.tiles.count))
         for tile in frame.tiles {
-            put32(UInt32(tile.id))
-            tile.bytes.withUnsafeBytes { bytes in if bytes.count > 0 {_ = memcpy(raw.advanced(by:offset),bytes.baseAddress!,bytes.count)} }
+            put32(UInt32(tile.id)); tileOffsets.append(offset)
+            if !transform {tile.bytes.withUnsafeBytes { bytes in if bytes.count > 0 {_ = memcpy(raw.advanced(by:offset),bytes.baseAddress!,bytes.count)} }}
             offset += tile.bytes.count
+        }
+        if transform {
+            DispatchQueue.concurrentPerform(iterations:4) { worker in
+                for i in stride(from:worker,to:frame.tiles.count,by:4) {
+                    let bytes=frame.tiles[i].bytes
+                    bytes.withUnsafeBytes { source in
+                        _ = retinalink_bc7_transform(source.bindMemory(to:UInt8.self).baseAddress!,self.raw.advanced(by:tileOffsets[i]).assumingMemoryBound(to:UInt8.self),bytes.count,0)
+                    }
+                }
+            }
         }
         if parallel, count >= 1024*1024 {
             if workers.isEmpty {workers = (0..<4).map {_ in Worker()}}
@@ -217,7 +233,13 @@ final class FramePacker {
                 body.append((compressed ? worker.packed:raw.advanced(by:start)).assumingMemoryBound(to:UInt8.self),count:stored)
             }
             // Rare incompressible frames still use the original raw envelope.
-            var result = Data([body.count < count ? 2:0]);result.reserveCapacity(9+min(body.count,count))
+            if transform && body.count >= count {
+                // The raw fallback must contain original BC7, never shuffled data.
+                for (i,tile) in frame.tiles.enumerated() {
+                    tile.bytes.withUnsafeBytes { _ = memcpy(raw.advanced(by:tileOffsets[i]),$0.baseAddress!,tile.bytes.count) }
+                }
+            }
+            var result = Data([body.count < count ? (transform ? 3:2):0]);result.reserveCapacity(9+min(body.count,count))
             result.put32(UInt32(count));result.put32(UInt32(min(body.count,count)))
             if body.count < count {result.append(body)} else {result.append(raw.assumingMemoryBound(to:UInt8.self),count:count)}
             return result

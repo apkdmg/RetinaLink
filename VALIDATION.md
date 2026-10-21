@@ -1,3 +1,106 @@
+# Public release preparation — 0.8.8 build 76
+
+Build 76 prepares the tested build-75 compression and Viewer session changes for a clean-source public release. Application source is unchanged from the installed build-75 comparison below; only the build number advances so test installations can receive the public update. Public artifact, notarization and feed verification are recorded separately after publication. The measured performance results below belong to installed build 75.
+
+# Lossless BC7 packing installed and measured — 21 October 2026 (0.8.8 build 75)
+
+**The optimized build is installed on both Macs. Native-5K full-screen motion improves from 25.51 to 35.27 delivered updates/s (+38.30%) with approximately 27.69% fewer bytes per frame and no additional image loss.** The existing BC7 encoder is unchanged; the new packing step restores its bytes exactly. BC7 itself remains the existing lossy image codec. Heavy full-screen motion still does not reach 60 updates/s.
+
+The comparison uses the same signed build 75 on both Macs, the same 5120 × 2880 full-screen Metal gradient, three frame credits, and 60-second runs. The control uses Host `--no-shuffled-packing`; the enabled run uses the default. Each contains 53 settled one-second samples, excluding startup/final edges. Both use authenticated TLS over IPv6 on the same USB cable. The Host PID and connection remain constant within each run, every observation identifies USB, and independent counters show corresponding traffic on Studio `en9` and iMac `en7` (about 22.8 GB over each complete collection interval). No SSH polling or UI capture helper runs during motion. An interrupted trial during post-install reconnection is explicitly discarded.
+
+| Full-screen 5K measurement | Compression disabled | Compression enabled |
+| --- | ---: | ---: |
+| Mean delivered updates/s | 25.506 | 35.274 |
+| One-second delivered range | 24.0–26.0 | 34.2–36.0 |
+| Application throughput | 2,864.96 Mbps | 2,865.01 Mbps |
+| Approximate MB per delivered frame¹ | 14.041 | 10.153 |
+| Mean capture callbacks/s | 59.740 | 59.974 |
+| Mean encode + pack | 11.268 ms | 11.251 ms |
+| Mean acknowledgement interval | 106.375 ms | 73.798 ms |
+| Captures coalesced/s | 34.245 | 24.698 |
+| New-format frames / encoded frames in settled samples | 0 / 1,352 | 1,869 / 1,869 |
+
+¹ Estimated from mean application throughput divided by delivered updates; send/ack interval boundaries make this an approximation. Separately, the identical synthetic fixture falls from **14,034,418 to 10,138,189 bytes (27.76%)**, with byte-for-byte reconstruction. Full-frame text/window fixtures retain the original format and their **259,733 / 125,600 byte** packets. At the measured link throughput, 60 full-screen updates/s would require about 6.0 MB/frame, versus about 10.15 MB now. The improvement uses the existing available throughput more efficiently; it does not increase the USB signaling rate or measured link capacity.
+
+The adaptive path also passes two further 60-second native-5K trials:
+
+| Desktop workload with optimization enabled | Mean delivered updates/s | Throughput | New-format frames / encoded frames |
+| --- | ---: | ---: | ---: |
+| Native moving window | 59.432 | 376.60 Mbps | 0 / 3,150 |
+| Core Animation bitmap-text scrolling | 59.748 | 483.82 Mbps | 0 / 3,226 |
+
+Both retain their original compression path and a continuous USB connection. Earlier build-74 runs of these scenes measured 59.54 and 59.89 updates/s; the new results remain near 60. The freshly repeated pre-install build-74 full-screen control measured 25.96 updates/s at 2.916 Gbps. The stronger comparison above uses identical installed binaries and IPv6 for both conditions.
+
+**Measurement boundary:** “delivered” is the Host count of Viewer acknowledgements after successful GPU completion. These runs do not establish physical panel presentation FPS or camera-measured input-to-photon latency. Protected-account per-stage Viewer logs were not collected; the additional CPU decode benchmark is separate from the live rendering measurement.
+
+Encoding 3 retains the bounded four-chunk LZ4 envelope, applying independent modulo-64-bit block differences and reversible bit-plane transposition within each tile. There is no previous-frame dependency, resolution change, chroma reduction or change to the image encoder. Four tile samples choose it only for dense updates with at least 10% estimated savings. Older Viewers, small updates and already-compressible desktop content retain their original formats. The optional `Hello.shuffledPacking` capability prevents sending the new format to old Viewers. During installation, the new Viewer successfully streamed from the old build-74 Host before Host was updated.
+
+The signed Host and actual Big Sur/Radeon iMac Viewer pass their complete self-tests, including all supported dimensions, partial bottom tiles, sparse/out-of-order IDs, retained/sliced buffers, legacy negotiation, adaptive/raw fallback, malformed metadata and existing GPU upload checks. ASan/UBSan pass every supported transform length with unaligned pointers and exact reconstruction. The isolated four-worker decoder benchmark on the iMac takes about 5.19 ms for LZ4 plus inverse transform versus 2.51 ms for LZ4 alone. The full live Host encode-and-pack cost remains about 11.3 ms in both conditions.
+
+After explicit user approval, Apple accepted Viewer submission `59991c5f-f2b9-408a-8420-665bf0211169` and Host submission `429c0f41-dce8-44e3-8201-5eebde45dd7d`. Both tickets are stapled and Gatekeeper-verified. The Viewer installed through the authenticated update relay from a signed loopback feed; Host was replaced at its permanent path with a verified signed copy and a retained build-74 backup. Existing pairing and fullscreen streaming were retained. No public release was published. Normal Host startup is restored with compression enabled, automatic updates remain on, and temporary update infrastructure is removed.
+
+Evidence: `work/compression-optimization/live-results.json`, `result.json`, signed self-test/sanitizer/fixture logs and `final-Host-ui.json`; the four valid `work/usb3-retest-20261021/compression75-{disabled,enabled,native-window,text-scroll}/` directories; signed/notarized artifacts in `work/release-0.8.8-build75/`. Exploratory prototype results are not production evidence; the evidence README identifies a discarded non-invertible prototype.
+
+# USB throughput optimization trials — 21 October 2026
+
+**No repeatable throughput or FPS improvement was established, so no production transport change was retained.** Twelve bounded Python socket trials and two compiled native C controls tested the same Studio-to-iMac USB path using synthetic data. Temporary listeners exited after each run; the iMac test executable was removed. No application, pairing, persistent network, account or power setting was modified. These are transport experiments, not a deployed optimization.
+
+| Transport variant | Received Gbps |
+| --- | ---: |
+| Default TCP baseline A | 2.829 |
+| App-like TCP_NODELAY baseline B | 2.869 |
+| Four parallel streams, aggregate | 2.503 |
+| Explicit 1-MiB / 4-MiB socket buffers | 2.854 / 2.868 |
+| More frequent TCP acknowledgements | 2.841 |
+| 64-KiB / 256-KiB application blocks | 2.746 / 2.746 |
+| Scoped IPv6 | 2.835 |
+| Interactive-video / responsive-data priority | 2.875 / 2.865 |
+| TCP_NOPUSH | 2.849 |
+| Compiled native C controls A / B | 2.829 / 2.833 |
+
+The largest apparent gain over the comparable TCP_NODELAY baseline is 0.2%, smaller than variation between baseline runs; it is not evidence of a useful improvement. Native C controls exclude Python as the sole explanation for the measured throughput. Read-only `SIOCGIFDEVMTU` reports Studio USB current/minimum/maximum MTU 1500/46/16000, but iMac USB 1500/46/1500, so a matching larger MTU is unavailable. These trials do not prove that no future driver, OS or application change can improve throughput.
+
+The exact 60-second native 5120 × 2880 full-screen gradient was repeated with the existing 0.8.7/74 apps: **25.85 delivered updates/s at 2.904 Gbps**, compared with **25.96 at 2.913 Gbps** earlier. The change is −0.11 updates/s (−0.44%), not an improvement. Capture averaged 59.89/s; the stream coalesced 34.04 captures/s. Both results count Viewer GPU-completion acknowledgements, not independently measured physical presentations. No socket-trial settings were applied to the display connection. At the end of those transport-only trials, the installed apps remained on their authenticated USB stream, with the same Host PID.
+
+Correction to the earlier conversational estimate: 5-Gbps USB 3.0 is a signaling rate. Its 8b/10b encoding leaves 500 MB/s (4 Gbps) before further overhead; the specification describes 400 MB/s or more as realistic application throughput. Thus the hypothetical 45-fps estimate at 5 Gbps of application payload is not attainable on this link at the same frame size. See [USB 3.0 specification §4.4.11](https://people.computing.clemson.edu/~jmarty/projects/lowLatencyNetworking/papers/LowLatencyLinuxAndPerformance/USB3.0Standard.pdf#page=69). At that pre-optimization frame size, the full-screen workload needed approximately 6.7 Gbps of application payload at 60 updates/s.
+
+Evidence: `work/usb-throughput-optimization/result.json`, all named trial JSON files, `transport_matrix.py`, `native_tcp.c`, and `work/usb3-retest-20261021/full-screen-confirmation/`. Original comparison evidence remains in the section below.
+
+# USB 3 SuperSpeed performance retest — 21 October 2026
+
+**The replacement cable negotiates USB SuperSpeed, and the iMac reports “Speed: Up to 5 Gb/s”. Native 5K window motion and scrolling now average approximately 60 delivered updates/s. Heavy full-screen animation does not reach 60.** The existing M2 Max Studio / Radeon R9 M290X iMac setup used Host and Viewer 0.8.7 build 74. Both applications remained running throughout; no application, pairing, account, network or power setting was changed.
+
+Each workload ran for 60 seconds at 5120 × 2880. The table uses settled one-second Host diagnostics, excluding the first five seconds and final two seconds of the runner interval (54 samples for the first three trials, 53 for full-screen motion). “Delivered” counts acknowledgements sent after successful Viewer GPU completion, not source draw requests or physical panel presentations.
+
+| Workload | Mean delivered updates/s | One-second range | Mean application traffic | Mean capture callbacks/s |
+| --- | ---: | ---: | ---: | ---: |
+| Native moving window | 59.54 | 55.0–61.0 | 383.2 Mbps | 59.54 |
+| GPU scrolling | 59.75 | 58.8–60.9 | 128.0 Mbps | 59.75 |
+| Core Animation bitmap-text scrolling | 59.89 | 58.0–61.1 | 484.4 Mbps | 59.87 |
+| Full-screen animated gradient | 25.96 | 24.0–27.0 | 2,913.3 Mbps | 59.79 |
+
+The first three trials have zero credit waits and zero capture coalescing in the measured samples. One-second accounting boundaries can produce values slightly above 60. The native-window result is substantially faster than the earlier USB 2 trial's median 32.1 rendered updates/s (28.9–39.0 range); that historical comparison also differs in app build and test duration and is not a controlled cable-only A/B experiment.
+
+The heavier animated gradient averages 104.0 ms from frame submission to acknowledgement and coalesces 33.83 captured images/s. Its observed application bytes per delivered frame imply approximately **6.73 Gbps at 60 updates/s**, above the nominal 5-Gbps USB rate even before additional overhead. The observed 2.91-Gbps application traffic demonstrates throughput beyond the previous 1-Gbps Ethernet link, but does not separately measure the cable's maximum throughput or isolate all transport/Viewer processing costs.
+
+A follow-up 12-second synthetic, single-stream TCP transfer bound to Studio `en9` and iMac `en7` received 4,406,116,352 bytes at **2.935 Gbps**, without screen encoding, TLS or Viewer rendering in the test connection. The temporary receiver exited afterward; no network settings or installed applications changed. This closely matches the heavy stream's 2.913 Gbps and points to the current USB networking/transport path as a significant throughput constraint. It does not establish the highest possible USB throughput or isolate USB-controller, driver, TCP or test-harness costs. The physical SuperSpeed link remains rated at 5 Gbps; the application traffic counter reports payload rate, not negotiated bus speed. Evidence: `work/usb3-retest-20261021/raw_transport.py` and `raw-transport.json`.
+
+All per-second Host observations retain one authenticated USB connection on `en9`; independent counters on Studio `en9` and iMac `en7` confirm the bulk transfer. The full-screen trial transferred approximately 22.74 GB on those interfaces, while each endpoint's company Ethernet traffic remained below 2 MB. SuperSpeed was observed before and after every trial. No SSH polling or UI capture helper ran during motion; only local Host JSON metadata was sampled. The protected dedicated account's direct Viewer performance logs were unavailable, so these results use Host-received GPU-completion acknowledgements and do not claim independently measured physical display FPS, perfect frame pacing, or input-to-photon latency. Final state remains authenticated USB streaming, with the same Host and Viewer PIDs and Host-reported Viewer fullscreen confirmation.
+
+Evidence and the reproducible runner: `work/usb3-retest-20261021/`, including `result.json`, each workload's `source.json`, `host-full.json`, `host-ui-observations.json`, before/after hardware and interface counters, executable hashes, and final connection state. SuperSpeed operation is now verified; **strictly stable physical 5K60 across workloads remains unestablished**.
+
+# Physical-session reconnection repair — local 0.8.7 build 74, 21 October 2026
+
+The owner's Viewer update to 0.8.6/73 installed and relaunched correctly but could not reconnect. Its connection guard compared its UID with the owner of `/dev/console`. On the actual Big Sur iMac, that file belonged to the separate remote administrator login (UID 501), while WindowServer's session list reported Dedicated Display (UID 502) on the physical console. The initial diagnosis that the owner needed to switch logins was incorrect.
+
+Viewer now queries its own WindowServer session with `CGSessionCopyCurrentDictionary`, requiring matching UID, completed login and on-console status. Session notifications and a periodic reconciliation use the same check, so unrelated login activity cannot suspend the physical Viewer and a missed notification can recover automatically. Diagnostics include the actual GUI-session state and do not describe a trusted, not-yet-connected Viewer as requiring SSH.
+
+**Live SSH recovery passed on the protected dedicated-account iMac.** The notarized 0.8.7/74 Viewer reconnected fullscreen without another approval while `/dev/console` still belonged to UID 501. A second Viewer startup returned fullscreen, and Host's deferred public updater completed 0.8.5/71 → 0.8.6/73. Final authenticated traffic uses scoped IPv6 link-local USB; Host reports native 5120 × 2880 capture. This is connection/startup validation, not a new stable-60-fps measurement. The installed Viewer is the local recovery candidate; **0.8.7 has not been published**.
+
+Pairing-binding, startup agent, FileVault status, login, screen-lock, power and company-network preservation checks pass. UI capture helpers stayed off. Session fixtures and the real encrypted reconnect/listener-restart fixtures pass in the exact signed Viewer on both Studio and Big Sur. Host and universal Viewer build successfully and are accepted/stapled by Apple with the existing Developer ID, trust namespace and update keys. Evidence: `work/reconnect-after-update73/result.json`, `live-recovery.json`, signed test logs and Host update observations; accepted app state: `work/release-0.8.7-build74/release-state.json`.
+
+Follow-up version alignment: the owner's installed Studio Host is now also the accepted **0.8.7/74** candidate at its existing application path. Both apps report build 74 and resume native 5K streaming, with Viewer reporting fullscreen. Host's installed executable matches the accepted build; pairing metadata, startup plist and FileVault checks remain identical. The first startup-agent reload failed and rolled back; the bounded retry with a short unload delay succeeded. The original startup agent is running again, and no additional Screen Recording approval was needed. Signed Host session/reconnection fixtures also pass. Evidence: `work/align-host74/`. This local alignment does not publish 0.8.7 or change the public feeds.
+
 # Public brief-disconnect recovery update — 0.8.6 build 73, 21 October 2026
 
 **[RetinaLink 0.8.6 build 73](https://github.com/apkdmg/RetinaLink/releases/tag/v0.8.6) is published for both apps.** The immutable tag pins clean source `9d5f688cecf8b9a3969161a559e41e80b1b42c02` with `source_dirty=false`. Viewer starts retrying after 0.25 seconds, then backs off through 0.75 and 1.5 seconds to the previous three-second rate. Orderly closes and local renderer cancellation do not punish healthy cables. TCP connection refusal during Host's listener restart also avoids a false 30-second cooldown; actual network/TLS failures, malformed packets and confirmed USB loss retain theirs. Fallback routes still rotate when a peer never delivers frames. Host ignores errors from a replaced capture session. These changes do not promise that an image returns within 0.25 seconds.

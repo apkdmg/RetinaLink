@@ -8,9 +8,10 @@ build="${1:-25}"
 out="${RETINALINK_PROBE_BUILD_DIR:-$root/build/probe-$build}"
 sdk="/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk"
 mkdir -p "$out/cache"
+xcrun clang -O3 -arch arm64 -arch x86_64 -mmacosx-version-min=10.15 -isysroot "$sdk" -c Sources/BC7Transform.c -o "$out/BC7Transform.o"
 for arch in arm64 x86_64; do
   min=10.15; if [ "$arch" = arm64 ]; then min=11.0; fi
-  xcrun swiftc -O -whole-module-optimization -swift-version 5 -sdk "$sdk" -module-cache-path "$out/cache" -target "$arch-apple-macos$min" -framework AppKit -framework Metal -framework Network -framework Security -framework QuartzCore -framework CoreVideo -framework CoreMedia -lcompression Sources/Protocol.swift Sources/Metrics.swift Sources/Diagnostics.swift Sources/DisplayClock.swift Sources/CaptureMailbox.swift Sources/Graphics.swift Sources/Enrollment.swift Sources/Signing.swift Sources/UI.swift Tests/SelfTests.swift Tools/ViewerProbe/main.swift -o "$out/Probe-$arch"
+  xcrun swiftc -O -whole-module-optimization -swift-version 5 -sdk "$sdk" -module-cache-path "$out/cache" -target "$arch-apple-macos$min" -framework AppKit -framework Metal -framework Network -framework Security -framework QuartzCore -framework CoreVideo -framework CoreMedia -lcompression -import-objc-header Sources/BC7Transform.h Sources/BC7Packing.swift Sources/Protocol.swift Sources/Metrics.swift Sources/Diagnostics.swift Sources/DisplayClock.swift Sources/CaptureMailbox.swift Sources/Graphics.swift Sources/Enrollment.swift Sources/Signing.swift Sources/UI.swift Tests/SelfTests.swift Tests/BC7PackingTests.swift Tools/ViewerProbe/main.swift "$out/BC7Transform.o" -o "$out/Probe-$arch"
 done
 app="$out/RetinaLink Viewer.app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
