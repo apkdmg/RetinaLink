@@ -28,14 +28,29 @@ func runWakeRecoveryTests() throws {
     stalled.succeeded("working-usb"); stalled.streamEnded("working-usb",wasStreaming:false)
     try check(stalled.selectKey(from:routes,now:100.25) == "untried-lan",
               "A peer that closes before delivering frames starved every fallback route")
+    var restarting = DirectLinkRoutePolicy()
+    _ = restarting.selectKey(from:[("only-cable",0)],now:100)
+    restarting.streamEnded("only-cable",wasStreaming:true)
+    let refusal = Link.CloseCause.network(.posix(.ECONNREFUSED))
+    if refusal.penalizesRoute { restarting.failed("only-cable",now:100.25) }
+    restarting.streamEnded("only-cable",wasStreaming:false)
+    try check(refusal == .connectionRefused && restarting.selectKey(from:[("only-cable",0)],now:101) == "only-cable",
+              "A quick retry before Host reopened its port blocked the only cable for 30 seconds")
+    try check(Link.CloseCause.network(.posix(.ENETDOWN)).penalizesRoute &&
+              Link.CloseCause.network(.tls(-9807)).penalizesRoute,
+              "Temporary-port recovery removed real network/authentication cooldowns")
     print("PASS: bounded fast retry, reset after recovery, healthy-cable preference and retained physical-failure cooldown")
 
     let key = String(repeating:"A",count:32)
-    let listener = try NWListener(using:networkParameters(key),on:.any)
-    var listening = false, servers:[Link] = [], connections:[Link] = []
+    let parameters = try networkParameters(key); parameters.allowLocalEndpointReuse = true
+    let listener = try NWListener(using:parameters,on:.any)
+    var listening = false, stopped = false, servers:[Link] = [], connections:[Link] = []
     var received = 0
-    listener.stateUpdateHandler = { state in if case .ready = state { listening = true } }
-    listener.newConnectionHandler = { connection in
+    listener.stateUpdateHandler = { state in
+        if case .ready = state { listening = true }
+        if case .cancelled = state { stopped = true }
+    }
+    let accept:(NWConnection)->Void = { connection in
         let peer = Link(connection); servers.append(peer)
         peer.onMessage = { [weak peer] type,data in
             if type == 77 { peer?.cancel() }
@@ -43,6 +58,7 @@ func runWakeRecoveryTests() throws {
         }
         peer.start()
     }
+    listener.newConnectionHandler = accept
     listener.start(queue:.main)
     defer { listener.cancel(); servers.forEach {$0.cancel()}; connections.forEach {$0.cancel()} }
     try pump(until:{listening})
@@ -87,4 +103,32 @@ func runWakeRecoveryTests() throws {
     try pump(until:{wrongClosed},timeout:18)
     try check(!wrongReady,"Reconnection accepted an untrusted TLS credential")
     print("PASS: actual TLS orderly-close classification, fresh encrypted reconnection, typed transport failure and wrong-key rejection")
+
+    // Reproduce the Host's listener teardown window without sleeping either
+    // Mac: the client arrives before the same port starts listening again.
+    let port = listener.port!
+    listener.cancel(); try pump(until:{stopped})
+    let early = Link(NWConnection(host:"127.0.0.1",port:port,using:try networkParameters(key)))
+    connections.append(early)
+    var earlyCause:Link.CloseCause?
+    early.onClose = { [weak early] _ in
+        let cause = early?.closeCause
+        DispatchQueue.main.async { earlyCause = cause }
+    }
+    early.start(); try pump(until:{earlyCause != nil},timeout:18)
+    try check(earlyCause == .connectionRefused && earlyCause?.penalizesRoute == false,
+              "A real connection refused by a restarting listener was treated as a bad cable")
+    let restartParameters = try networkParameters(key); restartParameters.allowLocalEndpointReuse = true
+    let restarted = try NWListener(using:restartParameters,on:port)
+    var restartedReady = false, resumed = false
+    restarted.stateUpdateHandler = { if case .ready = $0 { restartedReady = true } }
+    restarted.newConnectionHandler = accept
+    restarted.start(queue:.main); defer { restarted.cancel() }
+    try pump(until:{restartedReady})
+    let recovered = Link(NWConnection(host:"127.0.0.1",port:port,using:try networkParameters(key)))
+    connections.append(recovered)
+    recovered.onReady = { [weak recovered] in recovered?.send(78,token) }
+    recovered.onMessage = { type,data in DispatchQueue.main.async { if type == 78 && data == token { resumed = true } } }
+    recovered.start(); try pump(until:{resumed})
+    print("PASS: actual refused connection during listener restart, same-port encrypted recovery and no spurious 30-second cooldown")
 }

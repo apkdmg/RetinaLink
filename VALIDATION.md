@@ -1,3 +1,11 @@
+# Listener-restart recovery — release candidate 0.8.6 build 73, 21 October 2026
+
+Final release review caught an additional edge case: a 0.25-second retry may reach Host before its listener restarts, and treating `ECONNREFUSED` as a broken cable would then impose the old 30-second penalty on an otherwise healthy single route. Build 73 classifies this specific response separately. It retains bounded retry timing and route rotation without adding a failure cooldown for a closed port. Other network/TLS failures, invalid packets and confirmed USB loss retain their cooldown. The new fixture stops a real TLS listener, observes refusal, reopens the same port and verifies encrypted recovery. Physical lock/unlock timing remains unverified.
+
+The signed/notarized build-72 candidate was superseded before any source push, release tag, public assets or update-feed deployment. Its private artifacts are retained separately; they must not be published.
+
+---
+
 # Brief-disconnect recovery — unreleased development build 72, 21 October 2026
 
 Investigation of the reported lock/Escape/wake behavior found two avoidable delays in Viewer 0.8.5: every reconnect starts with a fixed three-second wait, and every closed stream penalizes its route for 30 seconds, including orderly peer closes and local renderer cancellation. A recent Host diagnostic showed an ordinary reconnection taking 4.225 seconds (3.324 before authentication, 0.901 for capture creation). It was not independently identified as the reported lock cycle. The bounded macOS capture log shows stream teardown and recreation, but does not identify why the Viewer first closed. The prior SSH control session has expired; retry with the existing verified host-key file rejects saved authentication. No new host key, password, sharing setting or login policy was accepted or changed.

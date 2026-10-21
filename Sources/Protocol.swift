@@ -309,8 +309,15 @@ func networkParameters(_ code: String?, preference: Int = 0) throws -> NWParamet
 // All callbacks execute on one serial connection queue; application code owns its own state queues.
 final class Link {
     enum CloseCause:String {
-        case peerClosed, transportFailure, invalidPacket, cancelled
+        case peerClosed, connectionRefused, transportFailure, invalidPacket, cancelled
         var penalizesRoute:Bool { self == .transportFailure || self == .invalidPacket }
+        static func network(_ error:NWError)->CloseCause {
+            // TCP reached a host that is not listening yet. Host temporarily
+            // closes its listener while releasing capture; this says nothing
+            // about cable health. Normal bounded retries still rotate routes.
+            if case .posix(.ECONNREFUSED) = error { return .connectionRefused }
+            return .transportFailure
+        }
     }
     let connection: NWConnection
     let queue = DispatchQueue(label: "retinalink.connection", qos: .userInteractive)
@@ -333,9 +340,9 @@ final class Link {
             guard let self = self else { return }
             switch state {
             case .ready: self.onReady?(); self.readHeader()
-            case .failed(let e): self.finish("Connection failed: \(e). Match pairing mode and code on both Macs, and check the network.",cause:.transportFailure)
+            case .failed(let e): self.finish("Connection failed: \(e). Match pairing mode and code on both Macs, and check the network.",cause:CloseCause.network(e))
             case .cancelled: self.finish("Disconnected",cause:.cancelled)
-            case .waiting(let e): self.finish("Network unavailable: \(e)",cause:.transportFailure)
+            case .waiting(let e): self.finish("Network unavailable: \(e)",cause:CloseCause.network(e))
             default: break
             }
         }
@@ -356,7 +363,7 @@ final class Link {
             var packet = Data(); packet.put32(UInt32(payload.count+1)); packet.append(type); packet.append(payload)
             FrameTrace.shared.event("send_begin",sequence:traceSequence,fields:["link":self.traceID,"type":type,"bytes":packet.count])
             self.connection.send(content: packet, completion: .contentProcessed { [weak self] e in
-                if let e = e { self?.finish("Send failed: \(e)",cause:.transportFailure) } else {
+                if let e = e { self?.finish("Send failed: \(e)",cause:CloseCause.network(e)) } else {
                     FrameTrace.shared.event("send_processed",sequence:traceSequence,fields:["link":self?.traceID ?? "closed","type":type])
                     self?.sendTimingHandler?(type,(ProcessInfo.processInfo.systemUptime-enqueued)*1000)
                     completion?()
@@ -380,7 +387,7 @@ final class Link {
     private func exact(_ count: Int, _ completion: @escaping (Data) -> Void) {
         connection.receive(minimumIncompleteLength: count, maximumLength: count) { [weak self] data, _, done, error in
             guard let self = self, !self.closed else { return }
-            if let e = error { self.finish("Receive failed: \(e)",cause:.transportFailure); return }
+            if let e = error { self.finish("Receive failed: \(e)",cause:CloseCause.network(e)); return }
             guard let d = data, d.count == count else { self.finish(done ? "Peer disconnected" : "Incomplete packet",cause:done ? .peerClosed : .invalidPacket); return }
             completion(d)
         }
