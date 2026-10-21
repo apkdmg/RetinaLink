@@ -1,5 +1,9 @@
 # Reproducing the local two-Mac tests
 
+## Brief-disconnect and wake-recovery checks
+
+From 0.8.6, both executables provide `--wake-recovery-test` for recovery checks. It checks bounded quick retries, orderly-close versus transport-failure classification through real disposable TLS streams, immediate reuse of a healthy preferred route, preserved cooldown for an actual failed route, and wrong-key rejection. No saved pairing, Keychain, screen capture, UI helper, lock/sleep or installation action is used. This fixture is not evidence of physical lock/unlock or system sleep/wake; validate those separately with the owner able to unlock the Mac, without changing lock or FileVault settings.
+
 ## Account-change and offline-forget regression tests
 
 For 0.8.5 and later, run **Host-only workspace removal and re-add** with disposable preferences and Keychain entries:

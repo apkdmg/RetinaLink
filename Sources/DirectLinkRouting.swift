@@ -1,6 +1,21 @@
 import Foundation
 import Network
 
+// A short interruption should not incur the old fixed three-second first wait.
+// A rendered frame or local wake/sign-in resets the burst; a TLS handshake
+// alone cannot force an indefinite fast-retry loop. Sustained loss retains
+// the existing three-second polling rate and per-route failure cooldowns.
+struct ViewerReconnectPolicy {
+    private(set) var attempts = 0
+    mutating func nextDelay()->Double {
+        let delays:[Double] = [0.25,0.75,1.5,3]
+        let delay = delays[min(attempts,delays.count-1)]
+        attempts = min(attempts+1,delays.count)
+        return delay
+    }
+    mutating func resumed() { attempts = 0 }
+}
+
 // Pure connection policy: discovery can suggest a route, but only a successful
 // TLS probe may trigger replacement of a working stream. All times are uptime.
 struct DirectLinkRoutePolicy {
@@ -52,6 +67,13 @@ struct DirectLinkRoutePolicy {
         retryAfter[key] = now+30
     }
     mutating func succeeded(_ key:String) { retryAfter.removeValue(forKey:key) }
+    // An orderly close/local renderer failure does not make a working cable
+    // bad. Prefer it again only after actual streaming: peers that repeatedly
+    // connect but never deliver a frame must still rotate through alternatives.
+    // Keep any independently recorded physical/transport failure cooldown.
+    mutating func streamEnded(_ key:String,wasStreaming:Bool) {
+        if wasStreaming { lastAttempt.removeValue(forKey:key) }
+    }
     func mayProbe(key:String,rank:Int,wired:Bool,activeKey:String?,activeRank:Int?,now:Double)->Bool {
         wired && key != activeKey && rank < (activeRank ?? 100) && now >= nextProbe && eligible(key,now:now)
     }

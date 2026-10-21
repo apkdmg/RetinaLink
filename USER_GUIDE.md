@@ -130,6 +130,8 @@ Dedicated account creation and restoration are advanced administrator operations
 
 ## If something does not work
 
+**Recovery after locking the main Mac:** Turning off the locked display can interrupt capture or the connection. Viewer keeps your pairing and reconnects. Version 0.8.6 starts its first retry after 0.25 seconds instead of three seconds, without treating an orderly disconnect as a broken cable. That is the time before retrying, not a guarantee that the picture returns in 0.25 seconds; macOS capture and the connection still need to resume. Lock, sleep and FileVault settings are unchanged.
+
 **Host keeps asking for Screen Recording:** Check **System Settings → Privacy & Security → Screen & System Audio Recording** (the name varies by macOS version). Enable the permanently installed Host copy. Accept **Quit & Reopen** if offered, reopen Host, and use **Retry capture** if shown. If an enabled entry still refers to an older development copy, remove that RetinaLink Host entry with **−**, add the current installed app with **+**, and enable it. Keep only the intended installed copy running.
 
 **The Macs cannot find each other:** Confirm both apps are open, the iMac is signed in and awake, and the connection is active. On macOS versions that request **Local Network** access, allow the relevant RetinaLink app. For first setup, renew Viewer's ten-minute discoverability window if needed. Company multicast, VPN or device-isolation policies can prevent discovery; contact your administrator rather than changing the company connection.

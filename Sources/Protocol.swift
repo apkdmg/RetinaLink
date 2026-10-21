@@ -308,12 +308,17 @@ func networkParameters(_ code: String?, preference: Int = 0) throws -> NWParamet
 
 // All callbacks execute on one serial connection queue; application code owns its own state queues.
 final class Link {
+    enum CloseCause:String {
+        case peerClosed, transportFailure, invalidPacket, cancelled
+        var penalizesRoute:Bool { self == .transportFailure || self == .invalidPacket }
+    }
     let connection: NWConnection
     let queue = DispatchQueue(label: "retinalink.connection", qos: .userInteractive)
     var onReady: (() -> Void)?
     var onMessage: ((UInt8, Data) -> Void)?
     var onClose: ((String) -> Void)?
     private var closed = false
+    private(set) var closeCause:CloseCause?
     private var acknowledgementHandler: ((Data) -> Void)?
     private var sendTimingHandler: ((UInt8,Double) -> Void)?
     var onReceiveTiming: ((UInt8,Double) -> Void)?
@@ -328,19 +333,19 @@ final class Link {
             guard let self = self else { return }
             switch state {
             case .ready: self.onReady?(); self.readHeader()
-            case .failed(let e): self.finish("Connection failed: \(e). Match pairing mode and code on both Macs, and check the network.")
-            case .cancelled: self.finish("Disconnected")
-            case .waiting(let e): self.finish("Network unavailable: \(e)")
+            case .failed(let e): self.finish("Connection failed: \(e). Match pairing mode and code on both Macs, and check the network.",cause:.transportFailure)
+            case .cancelled: self.finish("Disconnected",cause:.cancelled)
+            case .waiting(let e): self.finish("Network unavailable: \(e)",cause:.transportFailure)
             default: break
             }
         }
         connection.start(queue: queue)
         connection.viabilityUpdateHandler = { [weak self] viable in
-            if !viable { self?.finish("Connection unavailable. Reconnecting automatically…") }
+            if !viable { self?.finish("Connection unavailable. Reconnecting automatically…",cause:.transportFailure) }
         }
         queue.asyncAfter(deadline: .now()+15) { [weak self] in
             guard let self = self, self.connection.state != .ready, !self.closed else { return }
-            self.finish("Connection timed out. Check the address, pairing mode/code and Local Network permission.")
+            self.finish("Connection timed out. Check the address, pairing mode/code and Local Network permission.",cause:.transportFailure)
         }
     }
     func send(_ type: UInt8, _ payload: Data = Data(), traceSequence:UInt64?=nil, completion: (() -> Void)? = nil) {
@@ -351,7 +356,7 @@ final class Link {
             var packet = Data(); packet.put32(UInt32(payload.count+1)); packet.append(type); packet.append(payload)
             FrameTrace.shared.event("send_begin",sequence:traceSequence,fields:["link":self.traceID,"type":type,"bytes":packet.count])
             self.connection.send(content: packet, completion: .contentProcessed { [weak self] e in
-                if let e = e { self?.finish("Send failed: \(e)") } else {
+                if let e = e { self?.finish("Send failed: \(e)",cause:.transportFailure) } else {
                     FrameTrace.shared.event("send_processed",sequence:traceSequence,fields:["link":self?.traceID ?? "closed","type":type])
                     self?.sendTimingHandler?(type,(ProcessInfo.processInfo.systemUptime-enqueued)*1000)
                     completion?()
@@ -365,9 +370,9 @@ final class Link {
     func setAcknowledgementHandler(_ handler: @escaping (Data) -> Void) {
         queue.async { [weak self] in self?.acknowledgementHandler = handler }
     }
-    func cancel(reason: String = "Disconnected") { queue.async { [weak self] in self?.finish(reason) } }
-    private func finish(_ reason: String) {
-        guard !closed else { return }; closed = true
+    func cancel(reason: String = "Disconnected",cause:CloseCause = .cancelled) { queue.async { [weak self] in self?.finish(reason,cause:cause) } }
+    private func finish(_ reason: String,cause:CloseCause) {
+        guard !closed else { return }; closed = true; closeCause = cause
         connection.stateUpdateHandler = nil; connection.viabilityUpdateHandler = nil; connection.cancel(); onClose?(reason)
         onReady = nil; onMessage = nil; onClose = nil; acknowledgementHandler = nil
         sendTimingHandler = nil; onReceiveTiming = nil
@@ -375,8 +380,8 @@ final class Link {
     private func exact(_ count: Int, _ completion: @escaping (Data) -> Void) {
         connection.receive(minimumIncompleteLength: count, maximumLength: count) { [weak self] data, _, done, error in
             guard let self = self, !self.closed else { return }
-            if let e = error { self.finish("Receive failed: \(e)"); return }
-            guard let d = data, d.count == count else { self.finish(done ? "Peer disconnected" : "Incomplete packet"); return }
+            if let e = error { self.finish("Receive failed: \(e)",cause:.transportFailure); return }
+            guard let d = data, d.count == count else { self.finish(done ? "Peer disconnected" : "Incomplete packet",cause:done ? .peerClosed : .invalidPacket); return }
             completion(d)
         }
     }
@@ -384,7 +389,7 @@ final class Link {
         exact(4) { [weak self] data in
             guard let self = self else { return }
             let n = data.reduce(0) { ($0 << 8) | Int($1) }
-            guard n > 0, n <= maxPacket else { self.finish("Invalid packet length"); return }
+            guard n > 0, n <= maxPacket else { self.finish("Invalid packet length",cause:.invalidPacket); return }
             let bodyStarted = ProcessInfo.processInfo.systemUptime
             self.readOrdinal += 1;let packetOrdinal=self.readOrdinal
             FrameTrace.shared.event("body_begin",fields:["link":self.traceID,"packet":packetOrdinal,"bytes":n])

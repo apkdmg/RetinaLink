@@ -16,6 +16,7 @@ final class ViewerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
     let deviceName = Design.text(Host.current().localizedName ?? "iMac",12,.medium,secondary:true)
     var connected = false, automatic = true, terminating = false, receivedFrame = false, paused = false
     var reconnect: DispatchWorkItem?, statsTimer: Timer?, uiTimer: Timer?
+    var reconnectPolicy = ViewerReconnectPolicy()
     var recentDiagnostics: [String] = []
     var activity: StreamingActivity?
     var phase = "ready"
@@ -66,6 +67,7 @@ final class ViewerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         })
         sessionObservers.append(center.addObserver(forName:NSWorkspace.sessionDidBecomeActiveNotification,object:nil,queue:.main) { [weak self] _ in
             guard let self = self else { return }
+            self.reconnectPolicy.resumed()
             if DeviceSettings.binding == nil { self.nativeSetup.start() } else { self.startNativeDiscovery() }
             self.connect()
         })
@@ -190,7 +192,7 @@ final class ViewerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
                     guard let self = self, self.link === peer else { return }
                     if let candidate = candidate, !DirectLinkPath.requiredInterfaceVerified(connection:peer.connection,candidate:candidate) {
                         self.routePolicy.failed(candidate.key,now:ProcessInfo.processInfo.systemUptime)
-                        peer.cancel(reason:"The selected \(candidate.label) route changed. Trying another connection…"); return
+                        peer.cancel(reason:"The selected \(candidate.label) route changed. Trying another connection…",cause:.transportFailure); return
                     }
                     let hello = Hello(version:1,bc7:true,name:Host.current().localizedName ?? "iMac",maxFramesInFlight:3,chunkedPacking:true,appVersion:LaunchOptions.version,appBuild:LaunchOptions.build,automaticUpdates:true,updateRelay:UpdateRelayPolicy.version,directConnection:self.directConnection)
                     if let data = try? JSONEncoder().encode(hello) { peer.send(1,data) }
@@ -276,7 +278,7 @@ final class ViewerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
                             } }
                         } catch { peer.cancel(reason:"Pairing could not be removed. Check Viewer locally.") }
                     }
-                } else { peer.cancel(reason:"Unknown display message") }
+                } else { peer.cancel(reason:"Unknown display message",cause:.invalidPacket) }
             }
             view.onFrame = { [weak self,weak peer] timing in
                 credits.release(); statistics.completed(timing)
@@ -287,6 +289,7 @@ final class ViewerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 DispatchQueue.main.async {
                     guard let self = self, self.link === peer, !self.paused else { return }
                     if !self.receivedFrame {
+                        self.reconnectPolicy.resumed()
                         self.receivedFrame = true; self.phase = "streaming"; self.standby.isHidden = true; self.display?.isHidden = false
                         DiagnosticLog.shared.record("state","Streaming · fullscreen appliance"); self.publishState()
                         let fullscreen = self.window.screen.map { abs(self.window.frame.width-$0.frame.width)<2 && abs(self.window.frame.height-$0.frame.height)<2 } ?? false
@@ -295,23 +298,28 @@ final class ViewerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 }
             }
             view.onError = { [weak peer] text in peer?.cancel(reason:text) }
-            peer.onClose = { [weak self,weak peer] reason in DispatchQueue.main.async {
-                guard let self = self, let peer = peer, self.link === peer else { return }
-                if self.intentionalHandoverConnectionID == peer.traceID {
-                    // Moving to an authenticated cable did not make the old
-                    // route unhealthy. Keep it ready if the cable is removed.
-                    self.intentionalHandoverConnectionID = nil
-                } else if let candidate = candidate {
-                    self.routePolicy.failed(candidate.key,now:ProcessInfo.processInfo.systemUptime)
+            peer.onClose = { [weak self,weak peer] reason in
+                let cause = peer?.closeCause ?? .cancelled
+                DispatchQueue.main.async {
+                    guard let self = self, let peer = peer, self.link === peer else { return }
+                    if self.intentionalHandoverConnectionID == peer.traceID {
+                        // Moving to an authenticated cable did not make the old
+                        // route unhealthy. Keep it ready if the cable is removed.
+                        self.intentionalHandoverConnectionID = nil
+                    } else if cause.penalizesRoute, let candidate = candidate {
+                        self.routePolicy.failed(candidate.key,now:ProcessInfo.processInfo.systemUptime)
+                    } else if let candidate = candidate {
+                        self.routePolicy.streamEnded(candidate.key,wasStreaming:self.receivedFrame)
+                    }
+                    self.routeProbe?.cancel(); self.routeProbe = nil; self.activeCandidate = nil
+                    self.softwareUpdater.detachRelay()
+                    self.link = nil; self.connected = false; self.activity = nil; self.statsTimer?.invalidate(); self.statsTimer = nil
+                    self.receivedFrame = false; self.display?.removeFromSuperview(); self.display = nil
+                    DiagnosticLog.shared.record("state",reason+" · "+cause.rawValue)
+                    self.showStandby("Reconnecting to your Mac…",detail:"Your display stays paired. Waiting for the connection to return.",phase:"reconnecting")
+                    self.scheduleReconnect()
                 }
-                self.routeProbe?.cancel(); self.routeProbe = nil; self.activeCandidate = nil
-                self.softwareUpdater.detachRelay()
-                self.link = nil; self.connected = false; self.activity = nil; self.statsTimer?.invalidate(); self.statsTimer = nil
-                self.receivedFrame = false; self.display?.removeFromSuperview(); self.display = nil
-                DiagnosticLog.shared.record("state",reason)
-                self.showStandby("Reconnecting to your Mac…",detail:"Your display stays paired. Waiting for the connection to return.",phase:"reconnecting")
-                self.scheduleReconnect()
-            } }
+            }
             statsTimer?.invalidate()
             statsTimer = Timer.scheduledTimer(withTimeInterval:1,repeats:true) { [weak self,weak peer] _ in
                 guard let self = self, self.link === peer, self.connected else { return }
@@ -327,8 +335,9 @@ final class ViewerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
     func scheduleReconnect() {
         guard automatic, !terminating else { return }; reconnect?.cancel()
+        let delay = reconnectPolicy.nextDelay()
         let work = DispatchWorkItem { [weak self] in self?.connect() }; reconnect = work
-        DispatchQueue.main.asyncAfter(deadline:.now()+3,execute:work)
+        DispatchQueue.main.asyncAfter(deadline:.now()+delay,execute:work)
     }
     func startNativeDiscovery() {
         guard let binding = DeviceSettings.binding, !LaunchOptions.has("--legacy-ssh-transport") else { return }
@@ -346,7 +355,7 @@ final class ViewerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 // Do not wait for a stalled TCP stream when macOS has already
                 // reported the actual USB port down. Normal TLS reconnection
                 // selects an available fallback and retains the saved pairing.
-                self.link?.cancel(reason:"USB disconnected. Reconnecting automatically…")
+                self.link?.cancel(reason:"USB disconnected. Reconnecting automatically…",cause:.transportFailure)
                 return
             }
             if self.link == nil {
@@ -408,7 +417,7 @@ final class ViewerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         default: break
         }
     }
-    @objc func woke() { if link == nil { connect() }; if desiredFullscreen, let frame = NSScreen.main?.frame { window.setFrame(frame,display:true); window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps:true) } }
+    @objc func woke() { reconnectPolicy.resumed(); if link == nil { connect() }; if desiredFullscreen, let frame = NSScreen.main?.frame { window.setFrame(frame,display:true); window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps:true) } }
     func publishState() {
         guard let path = LaunchOptions.value("--ui-state-path") ?? Optional(NSHomeDirectory()+"/Library/Logs/RetinaLink/Viewer-ui.json") else { return }
         let full = window.map { window in window.screen.map { abs(window.frame.width-$0.frame.width)<2 && abs(window.frame.height-$0.frame.height)<2 } ?? false } ?? false

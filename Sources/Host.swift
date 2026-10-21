@@ -888,7 +888,10 @@ final class HostApp: NSObject, NSApplicationDelegate {
                     DiagnosticLog.shared.record("host", text)
                     if self.recentDiagnostics.count > 15 { self.recentDiagnostics.removeFirst() }
                 } }
-                session.onError = { [weak self] text in DispatchQueue.main.async { self?.stop(message:text) } }
+                session.onError = { [weak self,weak session] text in DispatchQueue.main.async {
+                    guard let self = self, let session = session, self.capture === session else { return }
+                    self.stop(message:text)
+                } }
                 try await session.start(width:width,height:height,fps:fps)
                 guard !Task.isCancelled, self.link === peer else { await session.stop(); return }
                 self.startingCapture = false
